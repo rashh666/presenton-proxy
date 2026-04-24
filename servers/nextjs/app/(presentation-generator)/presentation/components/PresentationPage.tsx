@@ -197,7 +197,11 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
             </div>
           </div>
           <div className="w-full max-w-[370px] h-full shrink-0 self-start sticky top-0">
-            <Chat />
+            <Chat
+              presentationId={presentation_id}
+              currentSlide={selectedSlide}
+              onPresentationChanged={fetchUserSlides}
+            />
           </div>
         </div>
       </div>
