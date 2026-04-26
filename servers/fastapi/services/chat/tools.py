@@ -43,10 +43,10 @@ class ChatTools:
             Tool(
                 name="getPresentationOutline",
                 description=(
-                    "Retrieve the current presentation outline from live slides "
-                    "database state (with memory fallback when needed). "
-                    "Return compact sections (no full slide JSON) to save context "
-                    "window. Use when the user asks about sections, flow, or slide plan."
+                    "Live database: current deck structure. "
+                    "Use for the **actual** slide list/order and compact previews—not for uploaded PDF text or pre-outline RAG. "
+                    "Falls back to stored outlines only if no slide rows exist. "
+                    "Return compact sections (no full slide JSON). Use for flow, sections, or 'what slides exist'."
                 ),
                 schema=NoArgsInput,
                 strict=True,
@@ -54,8 +54,9 @@ class ChatTools:
             Tool(
                 name="searchSlides",
                 description=(
-                    "Search SQL slides by semantic intent/keywords and return "
-                    "compact relevant snippets with slide identifiers. "
+                    "Live SQL slides: keyword/semantic style search with snippets and indices. "
+                    "Use to find on-slide text, topics, or which slide mentioned something. "
+                    "For source-document-only questions, rely on deck memory; use this when the question is about **slides as built**. "
                     "Always provide both query and limit."
                 ),
                 schema=SearchSlidesInput,
@@ -64,11 +65,9 @@ class ChatTools:
             Tool(
                 name="getSlideAtIndex",
                 description=(
-                    "Retrieve a single slide by zero-based index, including its "
-                    "layout id and compact preview by default. "
-                    "Set includeFullContent=true only when full JSON is explicitly needed "
-                    "(for example before editing existing content). "
-                    "If user says slide N, convert to zero-based index N-1."
+                    "Live SQL: one slide by index—authoritative for exact current content. "
+                    "Set includeFullContent=true when you need full JSON (before saveSlide or precise edits). "
+                    "If user says slide N, use zero-based index N-1."
                 ),
                 schema=GetSlideAtIndexInput,
                 strict=True,
