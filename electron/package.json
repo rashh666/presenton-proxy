@@ -40,7 +40,7 @@
     "fetch:export-runtime": "node sync_export_runtime.js --force",
     "fetch:export-runtime:latest": "EXPORT_RUNTIME_VERSION=latest node sync_export_runtime.js --force",
     "build:nextjs": "node build_nextjs_resources.js",
-    "build:fastapi": "rm -rf resources/fastapi && npm run build:vectorstore && MEM0_SPACY_STRICT=true node ensure_spacy_model.js && cd ../servers/fastapi && uv run --with pyinstaller python -m PyInstaller --distpath ../../electron/resources server.spec && cd ../../electron && node copy_fastapi_assets.js",
+    "build:fastapi": "rm -rf resources/fastapi && npm run build:vectorstore && cross-env MEM0_SPACY_STRICT=true node ensure_spacy_model.js && cd ../servers/fastapi && uv run --with pyinstaller python -m PyInstaller --distpath ../../electron/resources server.spec && cd ../../electron && node copy_fastapi_assets.js",
     "generate:version": "node generate_update.js",
     "build:electron": "npm run generate:version && npm run build:export-runtime && rm -rf app_dist && tsc && node build.js",
     "build:all": "npm run clean:build && npm run setup:env && npm run build:ts && npm run install:pyinstaller && npm run build:nextjs && npm run build:fastapi && npm run build:electron",
