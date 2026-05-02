@@ -43,3 +43,31 @@ include = [
     "utils*",
     "templates*",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Line coverage defaults (omit non-runtime / generated paths). Branch coverage doubles
+# the work for marginal signal; optimize for deterministic statement coverage runs.
+[tool.coverage.run]
+branch = false
+relative_files = true
+source = ["."]
+omit = [
+    "tests/*",
+    "**/.venv/*",
+    "**/venv/*",
+    "alembic/versions/*",
+    "scripts/*",
+]
+
+[tool.coverage.report]
+precision = 1
+skip_empty = true
+show_missing = true

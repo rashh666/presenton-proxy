@@ -114,15 +114,9 @@ templates/router.py
 tests/test_chat_conversation_store.py
 tests/test_chat_memory_store.py
 tests/test_documents_loader_unwrap.py
-tests/test_gemini_schema_support.py
-tests/test_image_generation.py
 tests/test_liteparse_service.py
-tests/test_mcp_server.py
 tests/test_mem0_presentation_memory_service.py
-tests/test_openai_schema_support.py
-tests/test_pptx_slides_processing.py
 tests/test_presentation_generation_api.py
-tests/test_slide_to_html.py
 utils/__init__.py
 utils/asset_directory_utils.py
 utils/async_iterator.py
