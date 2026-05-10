@@ -35,6 +35,9 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
     def _requires_auth(self, path: str) -> bool:
         if path.startswith("/api/"):
             return True
+        # PPTX export may re-fetch slide images without session/basic headers.
+        if path.startswith("/app_data/images/"):
+            return False
         if path.startswith("/app_data/"):
             return True
         return path in self._PROTECTED_NON_API_PATHS

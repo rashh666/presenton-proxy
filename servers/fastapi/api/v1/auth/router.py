@@ -6,6 +6,7 @@ from utils.simple_auth import (
     clear_session_cookie,
     create_session_token,
     get_auth_status,
+    get_basic_auth_credentials_from_request,
     get_session_token_from_request,
     is_auth_configured,
     set_session_cookie,
@@ -34,8 +35,20 @@ async def get_status(request: Request):
 async def verify_session(request: Request):
     if is_disable_auth_enabled():
         return {"authenticated": True, "username": "electron"}
+
     auth_status = get_auth_status(get_session_token_from_request(request))
-    if not auth_status["configured"] or not auth_status["authenticated"]:
+    if not auth_status["configured"]:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if not auth_status["authenticated"]:
+        basic_credentials = get_basic_auth_credentials_from_request(request)
+        if basic_credentials and verify_credentials(
+            basic_credentials[0], basic_credentials[1]
+        ):
+            return {
+                "authenticated": True,
+                "username": basic_credentials[0].strip(),
+            }
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     return {
