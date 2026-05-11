@@ -293,15 +293,19 @@ const SettingsPage = () => {
           ? llmConfig.VERTEX_MODEL
           : textProviderKey === "azure"
             ? llmConfig.AZURE_OPENAI_MODEL
-        : textProviderKey === "anthropic"
-          ? llmConfig.ANTHROPIC_MODEL
-          : textProviderKey === "ollama"
-            ? llmConfig.OLLAMA_MODEL
-            : textProviderKey === "custom"
-              ? llmConfig.CUSTOM_MODEL
-              : textProviderKey === "codex"
-                ? llmConfig.CODEX_MODEL
-                : "";
+            : textProviderKey === "openrouter"
+              ? llmConfig.OPENROUTER_MODEL
+              : textProviderKey === "cerebras"
+                ? llmConfig.CEREBRAS_MODEL
+                : textProviderKey === "anthropic"
+                  ? llmConfig.ANTHROPIC_MODEL
+                  : textProviderKey === "ollama"
+                    ? llmConfig.OLLAMA_MODEL
+                    : textProviderKey === "custom"
+                      ? llmConfig.CUSTOM_MODEL
+                      : textProviderKey === "codex"
+                        ? llmConfig.CODEX_MODEL
+                        : "";
   const textSummary = selectedTextModel
     ? `${textProviderLabel} (${selectedTextModel})`
     : textProviderLabel;
@@ -316,7 +320,20 @@ const SettingsPage = () => {
 
   useEffect(() => {
 
-    if (llmConfig.LLM === "codex" && !llmConfig.CODEX_MODEL || llmConfig.LLM === "openai" && !llmConfig.OPENAI_MODEL || llmConfig.LLM === "google" && !llmConfig.GOOGLE_MODEL || llmConfig.LLM === "vertex" && !llmConfig.VERTEX_MODEL || llmConfig.LLM === "azure" && !llmConfig.AZURE_OPENAI_MODEL || llmConfig.LLM === "anthropic" && !llmConfig.ANTHROPIC_MODEL || llmConfig.LLM === "ollama" && !llmConfig.OLLAMA_MODEL || llmConfig.LLM === "custom" && !llmConfig.CUSTOM_MODEL) {
+    if (
+      (llmConfig.LLM === "codex" && !llmConfig.CODEX_MODEL) ||
+      (llmConfig.LLM === "openai" && !llmConfig.OPENAI_MODEL) ||
+      (llmConfig.LLM === "google" && !llmConfig.GOOGLE_MODEL) ||
+      (llmConfig.LLM === "vertex" && !llmConfig.VERTEX_MODEL) ||
+      (llmConfig.LLM === "azure" &&
+        !llmConfig.AZURE_OPENAI_MODEL &&
+        !llmConfig.AZURE_OPENAI_DEPLOYMENT) ||
+      (llmConfig.LLM === "openrouter" && !llmConfig.OPENROUTER_MODEL) ||
+      (llmConfig.LLM === "cerebras" && !llmConfig.CEREBRAS_MODEL) ||
+      (llmConfig.LLM === "anthropic" && !llmConfig.ANTHROPIC_MODEL) ||
+      (llmConfig.LLM === "ollama" && !llmConfig.OLLAMA_MODEL) ||
+      (llmConfig.LLM === "custom" && !llmConfig.CUSTOM_MODEL)
+    ) {
       notify.error("Cannot save settings", "Please select a model for the selected provider");
 
       const currentUrl = window.location.href;

@@ -234,68 +234,6 @@ def resolve_ref(*, root: dict[str, object], ref: str) -> object:
     return resolved
 
 
-# Flattens a JSON schema by inlining all $ref references and removing $defs/definitions
-def flatten_json_schema(schema: dict) -> dict:
-    root_schema = deepcopy(schema)
-
-    def _flatten(node: Any) -> Any:
-        if isinstance(node, dict):
-            # If node is a pure $ref (or combined with extra fields), inline it
-            if "$ref" in node:
-                ref_value = node["$ref"]
-                assert isinstance(
-                    ref_value, str
-                ), f"Received non-string $ref - {ref_value}"
-                resolved = resolve_ref(root=root_schema, ref=ref_value)
-                assert isinstance(
-                    resolved, dict
-                ), f"Expected `$ref: {ref_value}` to resolve to a dictionary but got {type(resolved)}"
-                # Merge: referenced first, then overlay current (excluding $ref)
-                merged: dict[str, Any] = deepcopy(resolved)
-                for key, value in node.items():
-                    if key == "$ref":
-                        continue
-                    merged[key] = value
-                return _flatten(merged)
-
-            flattened: dict[str, Any] = {}
-            for key, value in node.items():
-                # Drop defs/definitions in output
-                if key in ("$defs", "definitions"):
-                    continue
-                if key == "properties" and isinstance(value, dict):
-                    flattened[key] = {
-                        prop_key: _flatten(prop_val)
-                        for prop_key, prop_val in value.items()
-                    }
-                elif key in ("items", "contains", "additionalProperties", "not"):
-                    if isinstance(value, dict):
-                        flattened[key] = _flatten(value)
-                    elif isinstance(value, list):
-                        flattened[key] = [_flatten(v) for v in value]
-                    else:
-                        flattened[key] = value
-                elif key in ("allOf", "anyOf", "oneOf", "prefixItems") and isinstance(
-                    value, list
-                ):
-                    flattened[key] = [_flatten(v) for v in value]
-                else:
-                    flattened[key] = (
-                        _flatten(value) if isinstance(value, (dict, list)) else value
-                    )
-            return flattened
-        if isinstance(node, list):
-            return [_flatten(v) for v in node]
-        return node
-
-    result = _flatten(schema)
-    # Ensure top-level cleanup just in case
-    if isinstance(result, dict):
-        result.pop("$defs", None)
-        result.pop("definitions", None)
-    return result
-
-
 def ensure_array_schemas_have_items(schema: dict) -> dict[str, Any]:
     """
     Recursively ensure every JSON schema node with type="array" has an "items" key.

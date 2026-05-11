@@ -5,11 +5,13 @@ from fastapi import HTTPException
 from llmai.shared import (
     AnthropicClientConfig,
     AzureOpenAIClientConfig,
+    CerebrasClientConfig,
     ChatGPTClientConfig,
     ClientConfig,
     GoogleClientConfig,
     OpenAIApiType,
     OpenAIClientConfig,
+    OpenRouterClientConfig,
     VertexAIClientConfig,
 )
 
@@ -21,6 +23,8 @@ from utils.get_env import (
     get_azure_openai_deployment_env,
     get_azure_openai_endpoint_env,
     get_anthropic_api_key_env,
+    get_cerebras_api_key_env,
+    get_cerebras_base_url_env,
     get_codex_access_token_env,
     get_codex_account_id_env,
     get_codex_refresh_token_env,
@@ -31,6 +35,8 @@ from utils.get_env import (
     get_google_api_key_env,
     get_ollama_url_env,
     get_openai_api_key_env,
+    get_openrouter_api_key_env,
+    get_openrouter_base_url_env,
     get_vertex_api_key_env,
     get_vertex_base_url_env,
     get_vertex_location_env,
@@ -188,6 +194,30 @@ def get_llm_config() -> ClientConfig:
                     detail="Anthropic API Key is not set",
                 )
             return AnthropicClientConfig(api_key=api_key)
+        case LLMProvider.OPENROUTER:
+            api_key = get_openrouter_api_key_env()
+            if not api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="OpenRouter API Key is not set",
+                )
+            base_url = get_openrouter_base_url_env()
+            return OpenRouterClientConfig(
+                api_key=api_key,
+                base_url=base_url or None,
+            )
+        case LLMProvider.CEREBRAS:
+            api_key = get_cerebras_api_key_env()
+            if not api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cerebras API Key is not set",
+                )
+            base_url = get_cerebras_base_url_env()
+            return CerebrasClientConfig(
+                api_key=api_key,
+                base_url=base_url or None,
+            )
         case LLMProvider.OLLAMA:
             return OpenAIClientConfig(
                 base_url=(get_ollama_url_env() or "http://localhost:11434") + "/v1",
@@ -214,7 +244,8 @@ def get_llm_config() -> ClientConfig:
                 status_code=400,
                 detail=(
                     "LLM Provider must be either openai, google, vertex, azure, "
-                    "anthropic, ollama, custom, or codex"
+                    "openrouter, cerebras, anthropic, ollama, "
+                    "custom, or codex"
                 ),
             )
 

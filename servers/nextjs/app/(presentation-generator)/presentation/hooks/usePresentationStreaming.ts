@@ -4,14 +4,108 @@ import {
   clearPresentationData,
   setPresentationData,
   setStreaming,
+  updateSlide,
+  type PresentationData,
 } from "@/store/slices/presentationGeneration";
 import { jsonrepair } from "jsonrepair";
 import { toast } from "sonner";
 import { MixpanelEvent, trackEvent } from "@/utils/mixpanel";
 import { getApiUrl, normalizeBackendAssetUrls } from "@/utils/api";
+import { store } from "@/store/store";
 
 const MAX_STREAM_RETRIES = 3;
 const STREAM_RETRY_DELAY_MS = 1_000;
+
+/** Chunk JSON replays each slide as first streamed; don't clobber URLs filled by `slide_assets`. */
+const PLACEHOLDER_ASSET_MARKERS = [
+  "/static/images/placeholder",
+  "/static/icons/placeholder",
+  "placeholder.jpg",
+  "placeholder.svg",
+];
+
+function isPlaceholderAssetUrl(url: unknown): boolean {
+  if (typeof url !== "string" || !url.trim()) return false;
+  const u = url.toLowerCase();
+  return PLACEHOLDER_ASSET_MARKERS.some((m) => u.includes(m));
+}
+
+function mergeContentPreservingResolvedAssets(prev: any, incoming: any): any {
+  if (incoming === undefined || incoming === null) return prev;
+  if (prev === undefined || prev === null) return incoming;
+
+  if (Array.isArray(incoming)) {
+    if (!Array.isArray(prev)) return incoming;
+    return incoming.map((item, i) =>
+      mergeContentPreservingResolvedAssets(prev[i], item)
+    );
+  }
+
+  if (typeof incoming !== "object") return incoming;
+  if (typeof prev !== "object") return incoming;
+
+  const result: Record<string, unknown> = { ...incoming };
+
+  for (const key of Object.keys(incoming)) {
+    const pv = prev[key];
+    const iv = incoming[key];
+
+    if (iv !== null && typeof iv === "object") {
+      if (Array.isArray(iv) && Array.isArray(pv)) {
+        result[key] = iv.map((item, idx) =>
+          mergeContentPreservingResolvedAssets(pv[idx], item)
+        );
+      } else if (
+        !Array.isArray(iv) &&
+        pv !== null &&
+        typeof pv === "object" &&
+        !Array.isArray(pv)
+      ) {
+        result[key] = mergeContentPreservingResolvedAssets(pv, iv);
+      }
+      continue;
+    }
+
+    if (
+      key === "__image_url__" &&
+      typeof iv === "string" &&
+      typeof pv === "string"
+    ) {
+      if (isPlaceholderAssetUrl(iv) && !isPlaceholderAssetUrl(pv)) {
+        result[key] = pv;
+      }
+    }
+    if (
+      key === "__icon_url__" &&
+      typeof iv === "string" &&
+      typeof pv === "string"
+    ) {
+      if (isPlaceholderAssetUrl(iv) && !isPlaceholderAssetUrl(pv)) {
+        result[key] = pv;
+      }
+    }
+  }
+
+  return result;
+}
+
+function mergeSlidesPreservingResolvedAssets(
+  prevSlides: any[] | undefined,
+  incomingSlides: any[]
+): any[] {
+  if (!prevSlides?.length) return incomingSlides;
+  return incomingSlides.map((incoming, idx) => {
+    const prev = prevSlides[idx];
+    if (!prev) return incoming;
+    return {
+      ...incoming,
+      content: mergeContentPreservingResolvedAssets(
+        prev.content,
+        incoming.content
+      ),
+    };
+  });
+}
 
 export const usePresentationStreaming = (
   presentationId: string,
@@ -108,25 +202,49 @@ export const usePresentationStreaming = (
               const partialData = JSON.parse(repairedJson);
               const normalizedPartialData = normalizeBackendAssetUrls(partialData);
 
-              if (normalizedPartialData.slides) {
-                if (
-                  normalizedPartialData.slides.length !== previousSlidesLength.current &&
-                  normalizedPartialData.slides.length > 0
-                ) {
-                  dispatch(
-                    setPresentationData({
-                      ...normalizedPartialData,
-                      slides: normalizedPartialData.slides,
-                    })
-                  );
-                  previousSlidesLength.current = normalizedPartialData.slides.length;
-                  setLoading(false);
-                }
+              if (
+                normalizedPartialData.slides &&
+                normalizedPartialData.slides.length > 0
+              ) {
+                const prev =
+                  store.getState().presentationGeneration.presentationData;
+                const mergedSlides = mergeSlidesPreservingResolvedAssets(
+                  prev?.slides,
+                  normalizedPartialData.slides
+                );
+                dispatch(
+                  setPresentationData({
+                    ...(prev ?? {}),
+                    ...normalizedPartialData,
+                    slides: mergedSlides,
+                  } as PresentationData)
+                );
+                previousSlidesLength.current =
+                  normalizedPartialData.slides.length;
+                setLoading(false);
               }
             } catch (error) {
               // JSON isn't complete yet, continue accumulating
             }
             break;
+
+          case "slide_assets": {
+            const idx = data.slide_index;
+            if (
+              typeof idx === "number" &&
+              idx >= 0 &&
+              data.slide &&
+              typeof data.slide === "object"
+            ) {
+              dispatch(
+                updateSlide({
+                  index: idx,
+                  slide: normalizeBackendAssetUrls(data.slide),
+                })
+              );
+            }
+            break;
+          }
 
           case "complete":
             try {

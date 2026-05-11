@@ -81,6 +81,30 @@ def set_azure_openai_deployment_env(value):
     os.environ["AZURE_OPENAI_DEPLOYMENT"] = value
 
 
+def set_openrouter_api_key_env(value):
+    os.environ["OPENROUTER_API_KEY"] = value
+
+
+def set_openrouter_model_env(value):
+    os.environ["OPENROUTER_MODEL"] = value
+
+
+def set_openrouter_base_url_env(value):
+    os.environ["OPENROUTER_BASE_URL"] = value
+
+
+def set_cerebras_api_key_env(value):
+    os.environ["CEREBRAS_API_KEY"] = value
+
+
+def set_cerebras_model_env(value):
+    os.environ["CEREBRAS_MODEL"] = value
+
+
+def set_cerebras_base_url_env(value):
+    os.environ["CEREBRAS_BASE_URL"] = value
+
+
 def set_anthropic_api_key_env(value):
     os.environ["ANTHROPIC_API_KEY"] = value
 

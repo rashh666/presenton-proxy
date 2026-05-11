@@ -76,6 +76,10 @@ const getSelectedTextModel = (config?: LLMConfig): string => {
       return config.VERTEX_MODEL || "";
     case "azure":
       return config.AZURE_OPENAI_MODEL || "";
+    case "openrouter":
+      return config.OPENROUTER_MODEL || "";
+    case "cerebras":
+      return config.CEREBRAS_MODEL || "";
     case "anthropic":
       return config.ANTHROPIC_MODEL || "";
     case "ollama":

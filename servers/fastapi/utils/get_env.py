@@ -126,6 +126,30 @@ def get_azure_openai_deployment_env():
     return os.getenv("AZURE_OPENAI_DEPLOYMENT")
 
 
+def get_openrouter_api_key_env():
+    return os.getenv("OPENROUTER_API_KEY")
+
+
+def get_openrouter_model_env():
+    return os.getenv("OPENROUTER_MODEL")
+
+
+def get_openrouter_base_url_env():
+    return os.getenv("OPENROUTER_BASE_URL")
+
+
+def get_cerebras_api_key_env():
+    return os.getenv("CEREBRAS_API_KEY")
+
+
+def get_cerebras_model_env():
+    return os.getenv("CEREBRAS_MODEL")
+
+
+def get_cerebras_base_url_env():
+    return os.getenv("CEREBRAS_BASE_URL")
+
+
 def get_custom_llm_api_key_env():
     return os.getenv("CUSTOM_LLM_API_KEY")
 

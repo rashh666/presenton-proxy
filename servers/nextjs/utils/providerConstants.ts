@@ -146,6 +146,22 @@ export const LLM_PROVIDERS: Record<string, LLMProviderOption> = {
     icon: "/providers/openai.png",
     getApiKeyUrl: "https://www.google.com/search?q=azure+openai+api+key",
   },
+  openrouter: {
+    value: "openrouter",
+    label: "OpenRouter",
+    description: "Many models through OpenRouter’s OpenAI-compatible API",
+    url: "https://openrouter.ai/api/v1",
+    icon: "/providers/openai.png",
+    getApiKeyUrl: "https://openrouter.ai/keys",
+  },
+  cerebras: {
+    value: "cerebras",
+    label: "Cerebras",
+    description: "Cerebras Cloud via OpenAI-compatible API",
+    url: "https://api.cerebras.ai/v1",
+    icon: "/providers/openai.png",
+    getApiKeyUrl: "https://inference-docs.cerebras.ai",
+  },
   anthropic: {
     value: "anthropic",
     label: "Anthropic",

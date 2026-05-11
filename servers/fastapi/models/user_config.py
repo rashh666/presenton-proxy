@@ -28,6 +28,16 @@ class UserConfig(BaseModel):
     AZURE_OPENAI_API_VERSION: Optional[str] = None
     AZURE_OPENAI_DEPLOYMENT: Optional[str] = None
 
+    # OpenRouter
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_MODEL: Optional[str] = None
+    OPENROUTER_BASE_URL: Optional[str] = None
+
+    # Cerebras
+    CEREBRAS_API_KEY: Optional[str] = None
+    CEREBRAS_MODEL: Optional[str] = None
+    CEREBRAS_BASE_URL: Optional[str] = None
+
     # Anthropic
     ANTHROPIC_API_KEY: Optional[str] = None
     ANTHROPIC_MODEL: Optional[str] = None

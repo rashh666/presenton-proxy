@@ -45,6 +45,12 @@ export const updateLLMConfig = (
     azure_openai_base_url: "AZURE_OPENAI_BASE_URL",
     azure_openai_api_version: "AZURE_OPENAI_API_VERSION",
     azure_openai_deployment: "AZURE_OPENAI_DEPLOYMENT",
+    openrouter_api_key: "OPENROUTER_API_KEY",
+    openrouter_model: "OPENROUTER_MODEL",
+    openrouter_base_url: "OPENROUTER_BASE_URL",
+    cerebras_api_key: "CEREBRAS_API_KEY",
+    cerebras_model: "CEREBRAS_MODEL",
+    cerebras_base_url: "CEREBRAS_BASE_URL",
     anthropic_api_key: "ANTHROPIC_API_KEY",
     anthropic_model: "ANTHROPIC_MODEL",
     ollama_url: "OLLAMA_URL",
@@ -92,7 +98,7 @@ export const changeProvider = (
   } else if (provider === "google") {
     newConfig.IMAGE_PROVIDER = "gemini_flash";
   } else {
-    newConfig.IMAGE_PROVIDER = "pexels"; // default for vertex, azure, ollama, custom, codex
+    newConfig.IMAGE_PROVIDER = "pexels";
   }
 
   return newConfig;

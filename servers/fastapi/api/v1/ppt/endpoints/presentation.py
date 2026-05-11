@@ -388,14 +388,20 @@ async def stream_presentation(
         outline = presentation.get_presentation_outline()
         image_urls_for_slides = get_images_for_slides_from_outline(outline.slides)
 
-        # These tasks will be gathered and awaited after all slides are generated
-        async_assets_generation_tasks = []
+        async_assets_generation_tasks: List[asyncio.Task] = []
+        asset_events: asyncio.Queue = asyncio.Queue()
+
+        async def notify_slide_assets_ready(slide_index: int, asset_task: asyncio.Task):
+            await asset_task
+            await asset_events.put(slide_index)
 
         slides: List[SlideModel] = []
         yield SSEResponse(
             event="response",
             data=json.dumps({"type": "chunk", "chunk": '{ "slides": [ '}),
         ).to_string()
+        yielded_slide_asset_sse_count = 0
+
         for i, slide_layout_index in enumerate(structure.slides):
             slide_layout = layout.slides[slide_layout_index]
 
@@ -426,29 +432,60 @@ async def stream_presentation(
             process_slide_add_placeholder_assets(slide)
 
             # This will mutate slide - start task immediately so it runs in parallel with next slide LLM generation
-            async_assets_generation_tasks.append(
-                asyncio.create_task(
-                    process_slide_and_fetch_assets(
-                        image_generation_service,
-                        slide,
-                        outline_image_urls=(
-                            image_urls_for_slides[i]
-                            if i < len(image_urls_for_slides)
-                            else None
-                        ),
-                    )
+            asset_task = asyncio.create_task(
+                process_slide_and_fetch_assets(
+                    image_generation_service,
+                    slide,
+                    outline_image_urls=(
+                        image_urls_for_slides[i]
+                        if i < len(image_urls_for_slides)
+                        else None
+                    ),
                 )
             )
+            async_assets_generation_tasks.append(asset_task)
+            asyncio.create_task(notify_slide_assets_ready(i, asset_task))
 
             yield SSEResponse(
                 event="response",
                 data=json.dumps({"type": "chunk", "chunk": slide.model_dump_json()}),
             ).to_string()
 
+            while True:
+                try:
+                    done_idx = asset_events.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                yielded_slide_asset_sse_count += 1
+                yield SSEResponse(
+                    event="response",
+                    data=json.dumps(
+                        {
+                            "type": "slide_assets",
+                            "slide_index": done_idx,
+                            "slide": slides[done_idx].model_dump(mode="json"),
+                        }
+                    ),
+                ).to_string()
+
         yield SSEResponse(
             event="response",
             data=json.dumps({"type": "chunk", "chunk": " ] }"}),
         ).to_string()
+
+        while yielded_slide_asset_sse_count < len(slides):
+            done_idx = await asset_events.get()
+            yielded_slide_asset_sse_count += 1
+            yield SSEResponse(
+                event="response",
+                data=json.dumps(
+                    {
+                        "type": "slide_assets",
+                        "slide_index": done_idx,
+                        "slide": slides[done_idx].model_dump(mode="json"),
+                    }
+                ),
+            ).to_string()
 
         generated_assets_lists = await asyncio.gather(*async_assets_generation_tasks)
         generated_assets = []

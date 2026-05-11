@@ -239,7 +239,7 @@ export const FileUploadSection: React.FC<FileUploadSectionProps> = ({
             <path d="M10 6V10M10 14H10.0088" stroke="#5B49A1" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
           <p className="text-sm md:text-base font-medium text-[#20165C] tracking-[-0.13px]">
-            <span className="font-bold text-[#5B49A1]">Note:</span> Template generation relies on <span className="font-semibold">vision-capable models</span> and is currently supported only by providers: <span className="font-medium text-[#5246C3]">Google</span>, <span className="font-medium text-[#5246C3]">OpenAI</span>, and <span className="font-medium text-[#5246C3]">Anthropic</span>.
+            <span className="font-bold text-[#5B49A1]">Note:</span> Template generation relies on <span className="font-semibold">vision-capable models</span> and is currently supported only by providers: <span className="font-medium text-[#5246C3]">Google</span>, <span className="font-medium text-[#5246C3]">OpenAI</span>, <span className="font-medium text-[#5246C3]">Anthropic</span>, and <span className="font-medium text-[#5246C3]">Azure OpenAI</span>.
             For optimal results, use state-of-the-art models from these providers, as performance may degrade with smaller models.
           </p>
         </div>

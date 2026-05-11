@@ -7,6 +7,8 @@ class LLMProvider(Enum):
     GOOGLE = "google"
     VERTEX = "vertex"
     AZURE = "azure"
+    OPENROUTER = "openrouter"
+    CEREBRAS = "cerebras"
     ANTHROPIC = "anthropic"
     CUSTOM = "custom"
     CODEX = "codex"

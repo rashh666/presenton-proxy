@@ -24,6 +24,16 @@ export interface LLMConfig {
   AZURE_OPENAI_API_VERSION?: string;
   AZURE_OPENAI_DEPLOYMENT?: string;
 
+  // OpenRouter
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODEL?: string;
+  OPENROUTER_BASE_URL?: string;
+
+  // Cerebras
+  CEREBRAS_API_KEY?: string;
+  CEREBRAS_MODEL?: string;
+  CEREBRAS_BASE_URL?: string;
+
   // Anthropic
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL?: string;

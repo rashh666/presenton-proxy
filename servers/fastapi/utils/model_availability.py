@@ -15,9 +15,11 @@ from utils.get_env import (
     get_anthropic_api_key_env,
     get_anthropic_model_env,
     get_can_change_keys_env,
+    get_cerebras_api_key_env,
     get_google_model_env,
     get_openai_api_key_env,
     get_openai_model_env,
+    get_openrouter_api_key_env,
     get_pixabay_api_key_env,
     get_pexels_api_key_env,
     get_vertex_api_key_env,
@@ -99,6 +101,14 @@ async def check_llm_and_image_provider_api_or_model_availability():
                 raise Exception(
                     "AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_BASE_URL must be provided"
                 )
+
+        elif get_llm_provider() == LLMProvider.OPENROUTER:
+            if not get_openrouter_api_key_env():
+                raise Exception("OPENROUTER_API_KEY must be provided")
+
+        elif get_llm_provider() == LLMProvider.CEREBRAS:
+            if not get_cerebras_api_key_env():
+                raise Exception("CEREBRAS_API_KEY must be provided")
 
         elif get_llm_provider() == LLMProvider.ANTHROPIC:
             anthropic_api_key = get_anthropic_api_key_env()

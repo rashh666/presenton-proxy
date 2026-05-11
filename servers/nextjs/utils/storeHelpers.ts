@@ -62,8 +62,25 @@ export const getLLMConfigValidationError = (
     ) {
       return "Azure OpenAI endpoint or base URL is required.";
     }
-    if (!isProvided(llmConfig.AZURE_OPENAI_MODEL)) {
-      return "Azure OpenAI model/deployment name is required.";
+    if (
+      !isProvided(llmConfig.AZURE_OPENAI_MODEL) &&
+      !isProvided(llmConfig.AZURE_OPENAI_DEPLOYMENT)
+    ) {
+      return "Provide an Azure model name or a deployment name (at least one).";
+    }
+  } else if (llm === "openrouter") {
+    if (!isProvided(llmConfig.OPENROUTER_API_KEY)) {
+      return "OpenRouter API key is required.";
+    }
+    if (!isProvided(llmConfig.OPENROUTER_MODEL)) {
+      return "Select or enter an OpenRouter model id.";
+    }
+  } else if (llm === "cerebras") {
+    if (!isProvided(llmConfig.CEREBRAS_API_KEY)) {
+      return "Cerebras API key is required.";
+    }
+    if (!isProvided(llmConfig.CEREBRAS_MODEL)) {
+      return "Select or enter a Cerebras model id.";
     }
   } else if (llm === "anthropic") {
     if (!isProvided(llmConfig.ANTHROPIC_API_KEY)) {
