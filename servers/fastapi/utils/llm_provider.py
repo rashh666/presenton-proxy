@@ -7,6 +7,7 @@ from constants.llm import (
     DEFAULT_AZURE_MODEL,
     DEFAULT_CEREBRAS_MODEL,
     DEFAULT_CODEX_MODEL,
+    DEFAULT_LITELLM_MODEL,
     DEFAULT_GOOGLE_MODEL,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENROUTER_MODEL,
@@ -21,6 +22,7 @@ from utils.get_env import (
     get_custom_model_env,
     get_google_api_key_env,
     get_google_model_env,
+    get_litellm_model_env,
     get_llm_provider_env,
     get_ollama_model_env,
     get_openai_api_key_env,
@@ -40,7 +42,7 @@ def get_llm_provider():
             detail=(
                 "Invalid LLM provider. Please select one of: "
                 "openai, google, vertex, azure, openrouter, cerebras, "
-                "anthropic, ollama, custom, codex"
+                "anthropic, litellm, ollama, custom, codex"
             ),
         )
 
@@ -85,6 +87,10 @@ def is_codex_selected():
     return get_llm_provider() == LLMProvider.CODEX
 
 
+def is_litellm_selected():
+    return get_llm_provider() == LLMProvider.LITELLM
+
+
 def get_model():
     selected_llm = get_llm_provider()
     if selected_llm == LLMProvider.OPENAI:
@@ -109,6 +115,8 @@ def get_model():
         return get_ollama_model_env()
     elif selected_llm == LLMProvider.CUSTOM:
         return get_custom_model_env()
+    elif selected_llm == LLMProvider.LITELLM:
+        return get_litellm_model_env() or DEFAULT_LITELLM_MODEL
     elif selected_llm == LLMProvider.CODEX:
         return get_codex_model_env() or DEFAULT_CODEX_MODEL
     else:
@@ -117,7 +125,7 @@ def get_model():
             detail=(
                 "Invalid LLM provider. Please select one of: "
                 "openai, google, vertex, azure, openrouter, cerebras, "
-                "anthropic, ollama, custom, codex"
+                "anthropic, litellm, ollama, custom, codex"
             ),
         )
 

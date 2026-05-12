@@ -100,6 +100,13 @@ export const getLLMConfigValidationError = (
     if (!isProvided(llmConfig.CUSTOM_MODEL)) {
       return 'No model selected for your custom endpoint. Use "Check models" after entering the URL, then choose a model.';
     }
+  } else if (llm === "litellm") {
+    if (!isProvided(llmConfig.LITELLM_BASE_URL)) {
+      return "LiteLLM base URL is required.";
+    }
+    if (!isProvided(llmConfig.LITELLM_MODEL)) {
+      return 'Use "Check models" after entering the base URL, then choose a model.';
+    }
   } else if (llm === "codex" || llm === "chatgpt") {
     if (!isProvided(llmConfig.CODEX_MODEL)) {
       return "Select a Codex model.";

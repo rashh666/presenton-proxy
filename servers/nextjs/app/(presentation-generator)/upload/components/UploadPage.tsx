@@ -80,6 +80,8 @@ const getSelectedTextModel = (config?: LLMConfig): string => {
       return config.OPENROUTER_MODEL || "";
     case "cerebras":
       return config.CEREBRAS_MODEL || "";
+    case "litellm":
+      return config.LITELLM_MODEL || "";
     case "anthropic":
       return config.ANTHROPIC_MODEL || "";
     case "ollama":

@@ -9,15 +9,12 @@ from enums.llm_provider import LLMProvider
 from utils.llm_config import get_llm_config
 from utils.llm_provider import get_llm_provider, get_model
 from utils.llm_utils import extract_text
+from utils.template_vision_errors import (
+    VISION_LAYOUT_USER_MESSAGE,
+    is_likely_vision_capability_error,
+)
 
 MAX_ATTEMPTS_PER_PROVIDER = 4
-SUPPORTED_TEMPLATE_PROVIDERS = (
-    LLMProvider.OPENAI,
-    LLMProvider.CODEX,
-    LLMProvider.GOOGLE,
-    LLMProvider.ANTHROPIC,
-    LLMProvider.AZURE,
-)
 
 
 def _exception_message(exc: Exception) -> str:
@@ -32,17 +29,9 @@ def _exception_message(exc: Exception) -> str:
     return " ".join(message.split())[:500]
 
 
-def _unsupported_template_provider_message() -> str:
-    return (
-        "Template generation only supports OpenAI, Codex, Google, Anthropic, or Azure OpenAI."
-    )
-
-
-def _supported_template_provider_or_raise() -> tuple[LLMProvider, str]:
-    provider = get_llm_provider()
-    if provider not in SUPPORTED_TEMPLATE_PROVIDERS:
-        raise HTTPException(status_code=400, detail=_unsupported_template_provider_message())
-    return provider, get_model()
+def _resolve_template_provider_and_model() -> tuple[LLMProvider, str]:
+    """Uses the configured text LLM; slide layout generation requires vision (image parts)."""
+    return get_llm_provider(), get_model()
 
 
 def _provider_label(provider: LLMProvider) -> str:
@@ -52,10 +41,22 @@ def _provider_label(provider: LLMProvider) -> str:
         return "Codex"
     if provider == LLMProvider.GOOGLE:
         return "Google"
+    if provider == LLMProvider.VERTEX:
+        return "Vertex AI"
     if provider == LLMProvider.ANTHROPIC:
         return "Anthropic"
     if provider == LLMProvider.AZURE:
         return "Azure OpenAI"
+    if provider == LLMProvider.OLLAMA:
+        return "Ollama"
+    if provider == LLMProvider.OPENROUTER:
+        return "OpenRouter"
+    if provider == LLMProvider.CEREBRAS:
+        return "Cerebras"
+    if provider == LLMProvider.CUSTOM:
+        return "Custom"
+    if provider == LLMProvider.LITELLM:
+        return "LiteLLM"
     return "Template provider"
 
 
@@ -108,6 +109,7 @@ async def _run_template_llm_with_retries(
     *,
     provider_label: str,
     call: Callable[[], Awaitable[str]],
+    requires_vision: bool = False,
 ) -> str:
     last_exception: Optional[Exception] = None
 
@@ -118,10 +120,18 @@ async def _run_template_llm_with_retries(
                 return response_text
             raise ValueError("No output from template generation provider")
         except HTTPException as exc:
+            if requires_vision and is_likely_vision_capability_error(exc):
+                raise HTTPException(
+                    status_code=400, detail=VISION_LAYOUT_USER_MESSAGE
+                ) from exc
             if 400 <= exc.status_code < 500:
                 raise exc
             last_exception = exc
         except Exception as exc:
+            if requires_vision and is_likely_vision_capability_error(exc):
+                raise HTTPException(
+                    status_code=400, detail=VISION_LAYOUT_USER_MESSAGE
+                ) from exc
             last_exception = exc
 
     if isinstance(last_exception, HTTPException):
@@ -141,7 +151,7 @@ def _template_provider_label_and_call(
     image_bytes: Optional[bytes] = None,
     media_type: str = "image/png",
 ) -> tuple[str, Callable[[], Awaitable[str]]]:
-    provider, model = _supported_template_provider_or_raise()
+    provider, model = _resolve_template_provider_and_model()
     label = _provider_label(provider)
     return (
         label,
@@ -168,7 +178,9 @@ async def generate_slide_layout_code(
         image_bytes=image_bytes,
         media_type=media_type,
     )
-    return await _run_template_llm_with_retries(provider_label=label, call=call)
+    return await _run_template_llm_with_retries(
+        provider_label=label, call=call, requires_vision=True
+    )
 
 
 async def edit_slide_layout_code(

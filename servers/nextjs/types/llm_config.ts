@@ -34,6 +34,11 @@ export interface LLMConfig {
   CEREBRAS_MODEL?: string;
   CEREBRAS_BASE_URL?: string;
 
+  // LiteLLM
+  LITELLM_BASE_URL?: string;
+  LITELLM_API_KEY?: string;
+  LITELLM_MODEL?: string;
+
   // Anthropic
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL?: string;

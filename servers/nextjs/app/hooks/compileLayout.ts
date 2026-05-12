@@ -5,8 +5,71 @@ import * as z from "zod";
 import * as Recharts from "recharts";
 import * as Babel from "@babel/standalone";
 import * as d3 from "d3";
+import * as LucideReact from "lucide-react";
 import { resolveBackendAssetUrl } from "@/utils/api";
 // import * as d3Cloud from "d3-cloud";
+
+/** Names already bound from Recharts (and core helpers) — do not shadow with Lucide. */
+const RESERVED_FOR_LUCIDE = new Set([
+    "Fragment",
+    "useState",
+    "useEffect",
+    "useRef",
+    "useMemo",
+    "useCallback",
+    "z",
+    "ResponsiveContainer",
+    "LineChart",
+    "Line",
+    "BarChart",
+    "Bar",
+    "XAxis",
+    "YAxis",
+    "CartesianGrid",
+    "Tooltip",
+    "Legend",
+    "PieChart",
+    "Pie",
+    "Cell",
+    "AreaChart",
+    "Area",
+    "RadarChart",
+    "Radar",
+    "PolarGrid",
+    "PolarAngleAxis",
+    "PolarRadiusAxis",
+    "ComposedChart",
+    "ScatterChart",
+    "Scatter",
+    "RadialBarChart",
+    "RadialBar",
+    "ReferenceLine",
+    "ReferenceDot",
+    "ReferenceArea",
+    "Brush",
+    "LabelList",
+    "Label",
+    "Text",
+]);
+
+let lucideBindingLinesCache: string | null = null;
+
+function getLucideBindingLines(): string {
+    if (lucideBindingLinesCache !== null) {
+        return lucideBindingLinesCache;
+    }
+    const lines: string[] = [];
+    for (const name of Object.keys(LucideReact)) {
+        if (!/^[A-Z]/.test(name)) continue;
+        if (RESERVED_FOR_LUCIDE.has(name)) continue;
+        const v = (LucideReact as Record<string, unknown>)[name];
+        if (typeof v !== "function") continue;
+        if (name === "Icon" || name === "LucideIcon") continue;
+        lines.push(`const ${name} = _Lucide[${JSON.stringify(name)}];`);
+    }
+    lucideBindingLinesCache = lines.join("\n");
+    return lucideBindingLinesCache;
+}
 
 export interface CompiledLayout {
     component: React.ComponentType<{ data: any }>;
@@ -77,6 +140,10 @@ export function compileCustomLayout(layoutCode: string): CompiledLayout | null {
             .replace(/import\s+.*\s+from\s+['"]zod['"];?/g, "")
             // Remove recharts imports
             .replace(/import\s+.*\s+from\s+['"]recharts['"];?/g, "")
+            // Remove lucide-react imports (icons are injected into the sandbox below)
+            .replace(/import\s+\{[\s\S]*?\}\s+from\s+['"]lucide-react['"];?\s*/g, "")
+            .replace(/import\s+\*\s+as\s+[\w$]+\s+from\s+['"]lucide-react['"];?\s*/g, "")
+            .replace(/import\s+[\w$]+\s+from\s+['"]lucide-react['"];?\s*/g, "")
             // Remove other common imports we'll provide
             .replace(/import\s+.*\s+from\s+['"]@\/[^'"]+['"];?/g, "")
             // Remove export default at the end (we'll handle it differently)
@@ -93,11 +160,14 @@ export function compileCustomLayout(layoutCode: string): CompiledLayout | null {
         }).code;
 
         // Create a factory function that executes the compiled code
+        const lucideBindings = getLucideBindingLines();
+
         const factory = new Function(
             "React",
             "_z",
             "Recharts",
             "_d3",
+            "_Lucide",
             // "_d3Cloud",
             `
              const z = _z;
@@ -118,6 +188,9 @@ export function compileCustomLayout(layoutCode: string): CompiledLayout | null {
                 Brush, LabelList, Label,Text
             } = Recharts || {};
 
+            // Lucide icons used in generated templates (<Star />, etc.) — skip names that clash with Recharts
+            ${lucideBindings}
+
             // Execute the compiled code
             ${compiled}
 
@@ -136,7 +209,7 @@ export function compileCustomLayout(layoutCode: string): CompiledLayout | null {
         );
 
         // Execute the factory
-        const result = factory(React, z, Recharts, d3);
+        const result = factory(React, z, Recharts, d3, LucideReact);
 
         if (!result.component) {
             console.error("No component found in compiled code");

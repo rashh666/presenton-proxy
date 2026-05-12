@@ -36,30 +36,26 @@ class _DummyClient:
         LLMProvider.OPENAI,
         LLMProvider.CODEX,
         LLMProvider.GOOGLE,
+        LLMProvider.VERTEX,
         LLMProvider.ANTHROPIC,
         LLMProvider.AZURE,
+        LLMProvider.OLLAMA,
+        LLMProvider.OPENROUTER,
+        LLMProvider.CEREBRAS,
+        LLMProvider.LITELLM,
+        LLMProvider.CUSTOM,
     ],
 )
-def test_supported_template_provider_resolution(monkeypatch, provider: LLMProvider):
+def test_resolve_template_provider_and_model(monkeypatch, provider: LLMProvider):
     monkeypatch.setattr(providers_module, "get_llm_provider", lambda: provider)
     monkeypatch.setattr(providers_module, "get_model", lambda: "resolved-model")
 
     resolved_provider, resolved_model = (
-        providers_module._supported_template_provider_or_raise()
+        providers_module._resolve_template_provider_and_model()
     )
 
     assert resolved_provider == provider
     assert resolved_model == "resolved-model"
-
-
-def test_supported_template_provider_rejects_unsupported(monkeypatch):
-    monkeypatch.setattr(providers_module, "get_llm_provider", lambda: LLMProvider.VERTEX)
-
-    with pytest.raises(HTTPException) as exc_info:
-        providers_module._supported_template_provider_or_raise()
-
-    assert exc_info.value.status_code == 400
-    assert "Template generation only supports" in str(exc_info.value.detail)
 
 
 def test_provider_label_fallback_for_unknown_value():
@@ -96,8 +92,14 @@ def test_exception_message_handles_http_exception_string_detail():
         LLMProvider.OPENAI,
         LLMProvider.CODEX,
         LLMProvider.GOOGLE,
+        LLMProvider.VERTEX,
         LLMProvider.ANTHROPIC,
         LLMProvider.AZURE,
+        LLMProvider.OLLAMA,
+        LLMProvider.OPENROUTER,
+        LLMProvider.CEREBRAS,
+        LLMProvider.LITELLM,
+        LLMProvider.CUSTOM,
     ],
 )
 def test_generate_slide_layout_code_uses_llmai_for_all_supported_providers(
@@ -143,8 +145,14 @@ def test_generate_slide_layout_code_uses_llmai_for_all_supported_providers(
         LLMProvider.OPENAI,
         LLMProvider.CODEX,
         LLMProvider.GOOGLE,
+        LLMProvider.VERTEX,
         LLMProvider.ANTHROPIC,
         LLMProvider.AZURE,
+        LLMProvider.OLLAMA,
+        LLMProvider.OPENROUTER,
+        LLMProvider.CEREBRAS,
+        LLMProvider.LITELLM,
+        LLMProvider.CUSTOM,
     ],
 )
 def test_edit_slide_layout_code_uses_llmai_text_only(
@@ -297,3 +305,57 @@ def test_run_template_llm_with_retries_raises_500_when_no_attempts(monkeypatch):
     monkeypatch.setattr(providers_module, "MAX_ATTEMPTS_PER_PROVIDER", original_attempts)
     assert exc_info.value.status_code == 500
     assert "Failed to generate template output" in str(exc_info.value.detail)
+
+def test_run_template_llm_with_retries_maps_vision_errors_when_requires_vision():
+    async def vision_fail():
+        raise RuntimeError("This model does not support image inputs")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            providers_module._run_template_llm_with_retries(
+                provider_label="OpenAI",
+                call=vision_fail,
+                requires_vision=True,
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "TEMPLATE_VISION_MODEL_REQUIRED" in str(exc_info.value.detail)
+
+
+def test_run_template_llm_with_retries_does_not_map_vision_without_flag():
+    async def vision_fail():
+        raise RuntimeError("This model does not support image inputs")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            providers_module._run_template_llm_with_retries(
+                provider_label="OpenAI",
+                call=vision_fail,
+                requires_vision=False,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+
+
+def test_generate_slide_layout_code_fail_fast_on_vision_error(monkeypatch):
+    dummy_client = _DummyClient(
+        outputs=[RuntimeError("image_url is not supported for this model")]
+    )
+    monkeypatch.setattr(providers_module, "get_llm_provider", lambda: LLMProvider.OPENAI)
+    monkeypatch.setattr(providers_module, "get_model", lambda: "text-only")
+    monkeypatch.setattr(providers_module, "get_llm_config", lambda: {"provider": "openai"})
+    monkeypatch.setattr(providers_module, "get_client", lambda config: dummy_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            providers_module.generate_slide_layout_code(
+                system_prompt="sys",
+                user_text="user",
+                image_bytes=b"x",
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert len(dummy_client.calls) == 1

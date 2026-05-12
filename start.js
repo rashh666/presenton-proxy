@@ -247,7 +247,7 @@ const setupUserConfigFromEnv = () => {
     existingConfig = JSON.parse(readFileSync(userConfigPath, "utf8"));
   }
 
-  if (!["ollama", "openai", "google", "vertex", "azure", "anthropic", "custom", "codex"].includes(existingConfig.LLM)) {
+  if (!["ollama", "openai", "google", "vertex", "azure", "openrouter", "cerebras", "anthropic", "litellm", "custom", "codex"].includes(existingConfig.LLM)) {
     existingConfig.LLM = undefined;
   }
 
@@ -284,6 +284,9 @@ const setupUserConfigFromEnv = () => {
     CUSTOM_LLM_API_KEY:
       process.env.CUSTOM_LLM_API_KEY || existingConfig.CUSTOM_LLM_API_KEY,
     CUSTOM_MODEL: process.env.CUSTOM_MODEL || existingConfig.CUSTOM_MODEL,
+    LITELLM_BASE_URL: process.env.LITELLM_BASE_URL || existingConfig.LITELLM_BASE_URL,
+    LITELLM_API_KEY: process.env.LITELLM_API_KEY || existingConfig.LITELLM_API_KEY,
+    LITELLM_MODEL: process.env.LITELLM_MODEL || existingConfig.LITELLM_MODEL,
     PEXELS_API_KEY: process.env.PEXELS_API_KEY || existingConfig.PEXELS_API_KEY,
     PIXABAY_API_KEY:
       process.env.PIXABAY_API_KEY || existingConfig.PIXABAY_API_KEY,

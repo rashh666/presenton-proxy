@@ -105,6 +105,18 @@ def set_cerebras_base_url_env(value):
     os.environ["CEREBRAS_BASE_URL"] = value
 
 
+def set_litellm_base_url_env(value):
+    os.environ["LITELLM_BASE_URL"] = value
+
+
+def set_litellm_api_key_env(value):
+    os.environ["LITELLM_API_KEY"] = value
+
+
+def set_litellm_model_env(value):
+    os.environ["LITELLM_MODEL"] = value
+
+
 def set_anthropic_api_key_env(value):
     os.environ["ANTHROPIC_API_KEY"] = value
 

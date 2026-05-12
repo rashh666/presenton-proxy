@@ -150,6 +150,18 @@ def get_cerebras_base_url_env():
     return os.getenv("CEREBRAS_BASE_URL")
 
 
+def get_litellm_base_url_env():
+    return os.getenv("LITELLM_BASE_URL")
+
+
+def get_litellm_api_key_env():
+    return os.getenv("LITELLM_API_KEY")
+
+
+def get_litellm_model_env():
+    return os.getenv("LITELLM_MODEL")
+
+
 def get_custom_llm_api_key_env():
     return os.getenv("CUSTOM_LLM_API_KEY")
 

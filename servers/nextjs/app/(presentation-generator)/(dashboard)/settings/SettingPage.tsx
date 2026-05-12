@@ -297,15 +297,17 @@ const SettingsPage = () => {
               ? llmConfig.OPENROUTER_MODEL
               : textProviderKey === "cerebras"
                 ? llmConfig.CEREBRAS_MODEL
-                : textProviderKey === "anthropic"
-                  ? llmConfig.ANTHROPIC_MODEL
-                  : textProviderKey === "ollama"
-                    ? llmConfig.OLLAMA_MODEL
-                    : textProviderKey === "custom"
-                      ? llmConfig.CUSTOM_MODEL
-                      : textProviderKey === "codex"
-                        ? llmConfig.CODEX_MODEL
-                        : "";
+                : textProviderKey === "litellm"
+                    ? llmConfig.LITELLM_MODEL
+                    : textProviderKey === "anthropic"
+                      ? llmConfig.ANTHROPIC_MODEL
+                      : textProviderKey === "ollama"
+                        ? llmConfig.OLLAMA_MODEL
+                        : textProviderKey === "custom"
+                          ? llmConfig.CUSTOM_MODEL
+                          : textProviderKey === "codex"
+                            ? llmConfig.CODEX_MODEL
+                            : "";
   const textSummary = selectedTextModel
     ? `${textProviderLabel} (${selectedTextModel})`
     : textProviderLabel;
@@ -328,6 +330,7 @@ const SettingsPage = () => {
       (llmConfig.LLM === "azure" && !llmConfig.AZURE_OPENAI_MODEL) ||
       (llmConfig.LLM === "openrouter" && !llmConfig.OPENROUTER_MODEL) ||
       (llmConfig.LLM === "cerebras" && !llmConfig.CEREBRAS_MODEL) ||
+      (llmConfig.LLM === "litellm" && !llmConfig.LITELLM_MODEL) ||
       (llmConfig.LLM === "anthropic" && !llmConfig.ANTHROPIC_MODEL) ||
       (llmConfig.LLM === "ollama" && !llmConfig.OLLAMA_MODEL) ||
       (llmConfig.LLM === "custom" && !llmConfig.CUSTOM_MODEL)

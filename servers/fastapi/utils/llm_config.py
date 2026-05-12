@@ -9,6 +9,7 @@ from llmai.shared import (
     ChatGPTClientConfig,
     ClientConfig,
     GoogleClientConfig,
+    LiteLLMClientConfig,
     OpenAIApiType,
     OpenAIClientConfig,
     OpenRouterClientConfig,
@@ -33,6 +34,8 @@ from utils.get_env import (
     get_custom_llm_url_env,
     get_disable_thinking_env,
     get_google_api_key_env,
+    get_litellm_api_key_env,
+    get_litellm_base_url_env,
     get_ollama_url_env,
     get_openai_api_key_env,
     get_openrouter_api_key_env,
@@ -43,6 +46,7 @@ from utils.get_env import (
     get_vertex_project_env,
     get_web_grounding_env,
 )
+from utils.available_models import normalize_openai_compatible_base_url
 from utils.llm_provider import get_llm_provider
 from utils.parsers import parse_bool_or_none
 from utils.set_env import (
@@ -218,6 +222,20 @@ def get_llm_config() -> ClientConfig:
                 api_key=api_key,
                 base_url=base_url or None,
             )
+        case LLMProvider.LITELLM:
+            base_url = normalize_openai_compatible_base_url(
+                get_litellm_base_url_env() or ""
+            )
+            if not base_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="LiteLLM base URL is not set (LITELLM_BASE_URL).",
+                )
+            lk = (get_litellm_api_key_env() or "").strip()
+            return LiteLLMClientConfig(
+                base_url=base_url,
+                api_key=lk if lk else None,
+            )
         case LLMProvider.OLLAMA:
             return OpenAIClientConfig(
                 base_url=(get_ollama_url_env() or "http://localhost:11434") + "/v1",
@@ -244,7 +262,7 @@ def get_llm_config() -> ClientConfig:
                 status_code=400,
                 detail=(
                     "LLM Provider must be either openai, google, vertex, azure, "
-                    "openrouter, cerebras, anthropic, ollama, "
+                    "openrouter, cerebras, anthropic, litellm, ollama, "
                     "custom, or codex"
                 ),
             )

@@ -162,6 +162,12 @@ export const LLM_PROVIDERS: Record<string, LLMProviderOption> = {
     icon: "/providers/openai.png",
     getApiKeyUrl: "https://inference-docs.cerebras.ai",
   },
+  litellm: {
+    value: "litellm",
+    label: "LiteLLM",
+    description: "OpenAI-compatible LiteLLM proxy or gateway",
+    icon: "/providers/openai.png",
+  },
   anthropic: {
     value: "anthropic",
     label: "Anthropic",

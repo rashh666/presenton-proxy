@@ -38,6 +38,11 @@ class UserConfig(BaseModel):
     CEREBRAS_MODEL: Optional[str] = None
     CEREBRAS_BASE_URL: Optional[str] = None
 
+    # LiteLLM (OpenAI-compatible gateway / proxy)
+    LITELLM_BASE_URL: Optional[str] = None
+    LITELLM_API_KEY: Optional[str] = None
+    LITELLM_MODEL: Optional[str] = None
+
     # Anthropic
     ANTHROPIC_API_KEY: Optional[str] = None
     ANTHROPIC_MODEL: Optional[str] = None

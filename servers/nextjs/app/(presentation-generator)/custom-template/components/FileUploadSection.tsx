@@ -1,9 +1,7 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import { UploadIcon, ChevronRight, Plus, FileText, X, Coins, Edit3, Info } from "lucide-react";
 import { ProcessedSlide } from "../types";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useSelector } from "react-redux";
-import { RootState } from "@/store/store";
 
 interface FileUploadSectionProps {
   selectedFile: File | null;
@@ -31,28 +29,12 @@ export const FileUploadSection: React.FC<FileUploadSectionProps> = ({
   completedSlides,
 }) => {
   const isProcessing = isProcessingPptx || slides.some((s) => s.processing);
-  const [isAllowed, setIsAllowed] = useState(false);
-
-  const { llm_config } = useSelector((state: RootState) => state.userConfig);
-
-
 
   const handleCheckFonts = () => {
 
     CheckFonts();
 
   }
-
-  useEffect(() => {
-
-
-    if (llm_config?.LLM === 'custom' || llm_config?.LLM === 'ollama') {
-      setIsAllowed(false);
-    } else {
-      setIsAllowed(true);
-    }
-  }, [llm_config]);
-
 
   return (
     <div className="md:h-[calc(100vh-310px)] h-[calc(100vh-450px)] relative overflow-hidden">
@@ -99,9 +81,8 @@ export const FileUploadSection: React.FC<FileUploadSectionProps> = ({
                     id="file-upload"
                     type="file"
                     accept=".pptx"
-                    disabled={!isAllowed}
                     onChange={handleFileSelect}
-                    className={`opacity-0 w-full h-full ${!isAllowed ? 'cursor-not-allowed' : 'cursor-pointer'} absolute top-0 left-0 z-10`}
+                    className="opacity-0 w-full h-full cursor-pointer absolute top-0 left-0 z-10"
                   />
                   <div className='absolute inset-0 flex flex-col items-center justify-center'>
                     <div className='w-[42px] h-[42px] flex justify-center items-center rounded-full bg-[#EBE9FE]' >
@@ -190,10 +171,10 @@ export const FileUploadSection: React.FC<FileUploadSectionProps> = ({
                         style={{
                           borderRadius: '48px',
                           background: 'linear-gradient(270deg, #D5CAFC 2.4%, #E3D2EB 27.88%, #F4DCD3 69.23%, #FDE4C2 100%)',
-                          cursor: !isAllowed ? 'not-allowed' : 'pointer',
+                          cursor: 'pointer',
                         }}
                         onClick={handleCheckFonts}
-                        disabled={isProcessing || !isAllowed}
+                        disabled={isProcessing}
                       >
                         {isProcessingPptx
                           ? "Checking Fonts..."
@@ -239,8 +220,7 @@ export const FileUploadSection: React.FC<FileUploadSectionProps> = ({
             <path d="M10 6V10M10 14H10.0088" stroke="#5B49A1" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
           <p className="text-sm md:text-base font-medium text-[#20165C] tracking-[-0.13px]">
-            <span className="font-bold text-[#5B49A1]">Note:</span> Template generation relies on <span className="font-semibold">vision-capable models</span> and is currently supported only by providers: <span className="font-medium text-[#5246C3]">Google</span>, <span className="font-medium text-[#5246C3]">OpenAI</span>, <span className="font-medium text-[#5246C3]">Anthropic</span>, and <span className="font-medium text-[#5246C3]">Azure OpenAI</span>.
-            For optimal results, use state-of-the-art models from these providers, as performance may degrade with smaller models.
+            <span className="font-bold text-[#5B49A1]">Note:</span> Each slide is sent to your configured text model as a <span className="font-semibold">screenshot plus HTML reference</span>. Only <span className="font-semibold">vision-capable</span> models (image input) can use the layout faithfully. Text-only models may error or produce weak layouts; pick a vision model in Settings for your provider.
           </p>
         </div>
 

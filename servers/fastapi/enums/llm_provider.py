@@ -10,5 +10,6 @@ class LLMProvider(Enum):
     OPENROUTER = "openrouter"
     CEREBRAS = "cerebras"
     ANTHROPIC = "anthropic"
+    LITELLM = "litellm"
     CUSTOM = "custom"
     CODEX = "codex"
