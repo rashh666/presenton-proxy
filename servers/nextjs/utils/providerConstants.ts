@@ -47,7 +47,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderOption> = {
     requiresApiKey: true,
     apiKeyField: "PIXABAY_API_KEY",
     apiKeyFieldLabel: "Pixabay API Key",
-    getApiKeyUrl: "https://docs.presenton.ai/help/get-api-keys/get-pixabay-api-keyhttps://www.google.com/search?q=how+to+get+openai+api+key&ie=UTF-8",
+    getApiKeyUrl: "https://docs.presenton.ai/help/get-api-keys/get-pixabay-api-key",
   },
   "dall-e-3": {
     value: "dall-e-3",
