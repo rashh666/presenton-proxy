@@ -1527,9 +1527,10 @@ async def image_status(
 ) -> JSONResponse:
     # Image generation is not wired up; always report complete so the UI stops polling.
     return JSONResponse(content={
-        "status": "completed",
-        "progress": 100,
-        "images": [],
+        "ready": True,
+        "completed": 5,
+        "total": 5,
+        "slides": [],
     })
 
 
