@@ -33,6 +33,7 @@ from tenacity import RetryError, retry, retry_if_exception, stop_after_attempt, 
 import pptx
 from pptx.util import Pt
 from pptx.dml.color import RGBColor
+from svg_generator import generate_svg_pictograph
 
 # ---------------------------------------------------------------------------
 # Optional faster JSON
@@ -897,6 +898,7 @@ _CODER_CIRCUIT = CircuitBreaker(failure_threshold=5, reset_timeout=30.0)
 # Image job store & cleanup
 _image_jobs: Dict[str, Dict[str, Any]] = {}
 _background_tasks: Dict[str, asyncio.Task] = {}
+_pending_slide_jobs: Dict[str, Dict[str, Any]] = {}   # approval-gated: populated by _finalise
 _cleanup_task: Optional[asyncio.Task] = None
 
 
@@ -1023,32 +1025,23 @@ async def _generate_images_background(
 
     async def _gen_one(idx: int, slide_id: str, raw_prompt: str) -> None:
         async with sem:
-            filename = settings.image_output_dir / f"slide_{idx}_{uuid.uuid4().hex[:6]}.png"
-            full_prompt = f"{settings.image_gen_prefix} {raw_prompt}, {settings.image_prompt_suffix}"
-            payload = {
-                "prompt": full_prompt,
-                "negative_prompt": settings.image_gen_negative,
-                "steps": settings.image_gen_steps,
-                "cfg_scale": settings.image_gen_cfg_scale,
-                "width": settings.image_gen_width,
-                "height": settings.image_gen_height,
-            }
+            filename = settings.image_output_dir / f"slide_{idx}_{uuid.uuid4().hex[:6]}.svg"
             try:
-                async with httpx.AsyncClient(timeout=settings.image_gen_timeout) as img_client:
-                    resp = await img_client.post(settings.image_gen_url, json=payload)
-                    resp.raise_for_status()
-                    img_data = resp.json()
-                    if img_data.get("images"):
-                        filename.write_bytes(base64.b64decode(img_data["images"][0]))
-                        url = f"/images/{filename.name}"
-                    else:
-                        url = settings.image_placeholder_url
+                # SVG generation is CPU-only; run in thread to keep event loop free
+                await asyncio.to_thread(generate_svg_pictograph, raw_prompt, filename)
+                url = f"/images/{filename.name}"
             except Exception as exc:
-                log.warning("Image generation failed for slide %d: %s", idx, exc)
+                log.warning("SVG generation failed for slide %d: %s", idx, exc)
                 url = settings.image_placeholder_url
 
             job["slides"][slide_id] = url
             job["completed"] += 1
+            # Keep the in-memory slide dict up to date so the pending job reflects real URLs
+            pending = _pending_slide_jobs.get(request_id, {})
+            for slide in pending.get("slides", []):
+                if slide.get("slide_id") == slide_id:
+                    slide["image_url"] = url
+                    break
 
     await asyncio.gather(*[_gen_one(i, sid, p) for i, sid, p in tasks_list])
     job["status"] = "done"
@@ -1433,6 +1426,7 @@ class Orchestrator:
 
         enhanced_prompts: Dict[str, Dict] = {}
         if settings.image_gen_enabled and slides_list:
+            # Enhance prompts via visual co-pilot so SVGs are semantically informed
             enhanced_prompts = await enhance_image_prompts(slides_list, persona, self.coder_client, self.log)
             for slide in slides_list:
                 sid = slide.get("slide_id")
@@ -1441,12 +1435,18 @@ class Orchestrator:
                     hints = slide.setdefault("_visual_hints", {})
                     hints["enhanced_prompt"] = ep.get("enhanced_prompt")
                     hints["style_tags"] = ep.get("style_tags", [])
-                slide["image_url"] = settings.image_placeholder_url
+                # Images are null until the user approves via /accept
+                slide["image_url"] = None
 
-            task = asyncio.create_task(
-                _generate_images_background(self.request_id, slides_list, enhanced_prompts, self.log)
-            )
-            _background_tasks[self.request_id] = task
+            # Queue for approval-gated generation; no background task fires yet
+            _pending_slide_jobs[self.request_id] = {
+                "status": "pending_approval",
+                "slides": slides_list,
+                "enhanced_prompts": enhanced_prompts,
+                "persona": persona_key,
+                "narrative": narrative.value,
+                "created_at": time.time(),
+            }
 
         # Compile PPTX in a thread so blocking file I/O doesn't stall the event loop
         settings.pptx_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1454,6 +1454,11 @@ class Orchestrator:
         await asyncio.to_thread(compile_pptx, final_json, pptx_path)
 
         # Metadata
+        images_pending = (
+            settings.image_gen_enabled
+            and bool(slides_list)
+            and self.request_id in _pending_slide_jobs
+        )
         final_json["_meta"] = {
             "pipeline_version": "6.0.0 (Native Sequential)",
             "supervisor_model": f"Reasoner ({settings.reasoner_model_key}) on GPU 0",
@@ -1463,6 +1468,8 @@ class Orchestrator:
             "timestamp": time.time(),
             "request_id": self.request_id,
             "download_url": f"/v1/presenton/download/{self.request_id}",
+            "image_status": "pending_approval" if images_pending else "disabled",
+            "approval_url": f"/v1/presenton/accept/{self.request_id}" if images_pending else None,
         }
 
         worker_data["choices"][0]["message"]["content"] = json_dumps(final_json)
@@ -1690,6 +1697,33 @@ async def image_status(
         "completed": job["completed"],
         "total": job["total"],
         "slides": job["slides"],
+    })
+
+
+@app.post("/v1/presenton/accept/{request_id}")
+async def accept_presentation(request_id: str) -> JSONResponse:
+    job = _pending_slide_jobs.get(request_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": ErrorCode.NOT_FOUND.value, "message": f"No pending job for request_id '{request_id}'."},
+        )
+    if job["status"] != "pending_approval":
+        return JSONResponse(content={
+            "request_id": request_id,
+            "status": job["status"],
+            "message": "Job is not awaiting approval.",
+        })
+    job["status"] = "generating"
+    log = make_logger(request_id)
+    task = asyncio.create_task(
+        _generate_images_background(request_id, job["slides"], job["enhanced_prompts"], log)
+    )
+    _background_tasks[request_id] = task
+    return JSONResponse(content={
+        "request_id": request_id,
+        "status": "generating",
+        "message": "SVG image generation started. Poll /v1/presenton/images/status for progress.",
     })
 
 
