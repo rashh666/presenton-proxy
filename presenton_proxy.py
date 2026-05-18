@@ -65,8 +65,8 @@ class Settings(BaseSettings):
     # Role‑isolated endpoints (these ports are published by the standing‑hot containers)
     reasoner_url: str = "http://localhost:8081/v1/chat/completions"
     reasoner_health_url: str = "http://localhost:8081/health"
-    coder_url: str = "http://localhost:8082/v1/chat/completions"
-    coder_health_url: str = "http://localhost:8082/health"
+    coder_url: str = "http://localhost:8081/v1/chat/completions"
+    coder_health_url: str = "http://localhost:8081/health"
 
     # Model selection (which GGUF to load on each GPU)
     reasoner_model_key: str = "gemma3"      # options: gemma3, dagger
