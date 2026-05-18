@@ -727,6 +727,12 @@ class NativeModelManager:
             )
         return result
 
+    def touch(self, role: str) -> None:
+        """Heartbeat: reset the idle timer for role so the watchdog won't evict it.
+        In unified mode always updates the 'reasoner' timestamp regardless of role."""
+        effective = "reasoner" if settings.unified_single_model else role
+        self._last_activity[effective] = time.time()
+
     async def shutdown(self) -> None:
         if self._watchdog_task:
             self._watchdog_task.cancel()
@@ -1223,6 +1229,12 @@ class Orchestrator:
             raise_api_error(ErrorCode.REQUEST_TOO_LARGE, "Schema payload too large.", 413)
         return schema, schema_str
 
+    async def _keepalive_touch(self, role: str, stop_event: asyncio.Event) -> None:
+        """Pings the watchdog every 10 s while a request is in flight."""
+        while not stop_event.is_set():
+            NATIVE_MODEL_MANAGER.touch(role)
+            await asyncio.sleep(10)
+
     async def _run_supervisor(
         self,
         chat_req: ChatCompletionRequest,
@@ -1272,6 +1284,8 @@ class Orchestrator:
             msgs.append({"role": msg.role, "content": content})
 
         t0 = time.perf_counter()
+        stop_event = asyncio.Event()
+        heartbeat_task = asyncio.create_task(self._keepalive_touch("reasoner", stop_event))
         try:
             sup_data = await self.reasoner_client.generate(
                 msgs,
@@ -1297,6 +1311,9 @@ class Orchestrator:
         except Exception as exc:
             self.log.exception("Supervisor failure")
             raise_api_error(ErrorCode.SUPERVISOR_FAILED, f"Supervisor failed: {exc}", 502)
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(heartbeat_task, timeout=5)
 
     async def _run_worker(
         self,
@@ -1332,6 +1349,8 @@ class Orchestrator:
         )
 
         t0 = time.perf_counter()
+        stop_event = asyncio.Event()
+        heartbeat_task = asyncio.create_task(self._keepalive_touch("coder", stop_event))
         try:
             worker_data = await self.coder_client.generate(
                 [
@@ -1356,6 +1375,9 @@ class Orchestrator:
         except Exception as exc:
             self.log.exception("Worker failure")
             raise_api_error(ErrorCode.WORKER_FAILED, f"Worker failed: {exc}", 502)
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(heartbeat_task, timeout=5)
 
     async def _finalise(
         self,
