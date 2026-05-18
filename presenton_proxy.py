@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     models_host_path: str = os.environ.get("MIA_MODELS_PATH", "/models")
     process_startup_timeout: int = 120   # seconds to wait for health after spawn
     idle_timeout: int = 300              # seconds of inactivity before VRAM flush
+    llm_timeout: int = 600               # httpx read timeout for LLM inference calls
 
     # Unified single-model mode: one llama-server spanning both GPUs on port 8081.
     # Both reasoner and coder phases hit the same endpoint.
@@ -802,11 +803,13 @@ class NativeModelManager:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     env=env,
-                    stdout=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 self._procs[role] = proc
                 self._last_activity[role] = time.time()
+                # Stream stderr to logger so model errors are visible in proxy logs
+                asyncio.create_task(self._pipe_stderr(role, proc))
             except Exception as exc:
                 _base_logger.error("Failed to spawn %s: %s", role, exc)
                 return False
@@ -857,6 +860,18 @@ class NativeModelManager:
                         )
                         async with self._locks[role]:
                             await self._terminate_role(role)
+
+    async def _pipe_stderr(self, role: str, proc: asyncio.subprocess.Process) -> None:
+        """Read the process's stderr line-by-line and forward to the proxy logger."""
+        stderr_log = logging.getLogger(f"llama-server.{role}")
+        assert proc.stderr is not None
+        try:
+            async for raw in proc.stderr:
+                line = raw.decode(errors="replace").rstrip()
+                if line:
+                    stderr_log.info("%s", line)
+        except Exception:
+            pass
 
     async def _wait_for_health(self, health_url: str, timeout: int) -> bool:
         start = time.time()
@@ -1155,11 +1170,11 @@ class Orchestrator:
     def __init__(self, request_id: str, log: RequestLoggerAdapter) -> None:
         self.request_id = request_id
         self.log = log
-        self.reasoner_client = LLMClient(settings.reasoner_url, circuit=_REASONER_CIRCUIT)
+        self.reasoner_client = LLMClient(settings.reasoner_url, timeout=settings.llm_timeout, circuit=_REASONER_CIRCUIT)
         # In unified mode both phases share the same endpoint and circuit breaker
         coder_url = settings.reasoner_url if settings.unified_single_model else settings.coder_url
         coder_circuit = _REASONER_CIRCUIT if settings.unified_single_model else _CODER_CIRCUIT
-        self.coder_client = LLMClient(coder_url, circuit=coder_circuit)
+        self.coder_client = LLMClient(coder_url, timeout=settings.llm_timeout, circuit=coder_circuit)
 
     async def run_full(
         self,
@@ -1313,7 +1328,11 @@ class Orchestrator:
             raise_api_error(ErrorCode.SUPERVISOR_FAILED, f"Supervisor failed: {exc}", 502)
         finally:
             stop_event.set()
-            await asyncio.wait_for(heartbeat_task, timeout=5)
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     async def _run_worker(
         self,
@@ -1377,7 +1396,11 @@ class Orchestrator:
             raise_api_error(ErrorCode.WORKER_FAILED, f"Worker failed: {exc}", 502)
         finally:
             stop_event.set()
-            await asyncio.wait_for(heartbeat_task, timeout=5)
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     async def _finalise(
         self,
