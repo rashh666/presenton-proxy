@@ -31,6 +31,10 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings
 from tenacity import RetryError, retry, retry_if_exception, stop_after_attempt, wait_exponential
+import pptx
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
 
 # ---------------------------------------------------------------------------
 # Optional faster JSON
@@ -1290,6 +1294,10 @@ class Orchestrator:
             "request_id": self.request_id,
         }
 
+        # Compile .pptx in a thread so blocking file I/O doesn't stall the event loop
+        pptx_filename = f"presentation_{self.request_id}.pptx"
+        await asyncio.to_thread(compile_pptx, final_json, pptx_filename)
+
         worker_data["choices"][0]["message"]["content"] = json_dumps(final_json)
         return worker_data
 
@@ -1602,6 +1610,34 @@ async def list_layouts() -> Dict:
 @app.get("/v1/presenton/narratives")
 async def list_narratives() -> Dict:
     return {ns.value: NARRATIVE_INSTRUCTIONS[ns] for ns in NarrativeStructure}
+
+
+# ---------------------------------------------------------------------------
+# PPTX compiler
+def compile_pptx(presentation_json: dict, output_filename: str = "output_presentation.pptx") -> None:
+    """Takes the pipeline's JSON output and compiles it into a downloadable .pptx file."""
+    prs = pptx.Presentation()
+
+    for slide_data in presentation_json.get("slides", []):
+        title_text = slide_data.get("title", "No Title")
+        content_items = slide_data.get("content", [])
+
+        slide_layout = prs.slide_layouts[1]  # Title and Content
+        slide = prs.slides.add_slide(slide_layout)
+
+        slide.shapes.title.text = title_text
+
+        text_frame = slide.placeholders[1].text_frame
+        text_frame.text = ""
+
+        for i, item in enumerate(content_items):
+            p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
+            p.text = str(item)
+            p.font.size = Pt(20)
+            p.font.color.rgb = RGBColor(0, 0, 0)
+
+    prs.save(output_filename)
+    _base_logger.info("PPTX compiled and saved: %s", output_filename)
 
 
 # ---------------------------------------------------------------------------
