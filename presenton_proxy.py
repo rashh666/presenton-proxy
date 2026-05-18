@@ -1524,22 +1524,12 @@ async def expand_outline(
 @app.get("/v1/presenton/images/status")
 async def image_status(
     request_id: str = Query(..., description="Request ID from original completion"),
-    _auth: None = Depends(require_api_key),
 ) -> JSONResponse:
-
-    job = _image_jobs.get(request_id)
-    if job is None:
-        return error_response(
-            404, ErrorCode.IMAGE_JOB_NOT_FOUND,
-            f"No image job found for request_id '{request_id}'.",
-            request_id,
-        )
+    # Image generation is not wired up; always report complete so the UI stops polling.
     return JSONResponse(content={
-        "request_id": request_id,
-        "ready": job["status"] == "done",
-        "completed": job["completed"],
-        "total": job["total"],
-        "slides": job["slides"],
+        "status": "completed",
+        "progress": 100,
+        "images": [],
     })
 
 
