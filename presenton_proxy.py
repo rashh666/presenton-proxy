@@ -1386,16 +1386,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
-_cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-if _cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_cors_origins,
-        allow_credentials=True,
-        allow_methods=["POST", "GET"],
-        allow_headers=["*"],
-    )
+# CORS middleware — localhost:3000 is always trusted; add more via CORS_ORIGINS env var
+_cors_origins = list({
+    "http://localhost:3000",
+    *[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+})
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(HTTPException)
