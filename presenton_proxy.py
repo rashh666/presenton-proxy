@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-presenton_proxy.py — Production-grade multi-agent proxy for Presenton (v5.2.0)
-"Standing-Hot" architecture for dual AMD RX 9060 XT GPUs with ROCm.
-Both model containers start once at boot and stay resident in VRAM.
+presenton_proxy.py — Production-grade multi-agent proxy for Presenton (v6.0.0)
+"Native Sequential" architecture: llama-server processes run directly on the host,
+one per AMD RX 9060 XT GPU (ROCm), with a VRAM-clearing idle watchdog.
 """
 
 from __future__ import annotations
@@ -21,10 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
-import docker
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -32,9 +31,8 @@ from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings
 from tenacity import RetryError, retry, retry_if_exception, stop_after_attempt, wait_exponential
 import pptx
-from pptx.util import Inches, Pt
+from pptx.util import Pt
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
 
 # ---------------------------------------------------------------------------
 # Optional faster JSON
@@ -66,13 +64,13 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Settings
 class Settings(BaseSettings):
-    # Role‑isolated endpoints (these ports are published by the standing‑hot containers)
+    # Role-isolated endpoints
     reasoner_url: str = "http://localhost:8081/v1/chat/completions"
     reasoner_health_url: str = "http://localhost:8081/health"
-    coder_url: str = "http://localhost:8081/v1/chat/completions"
-    coder_health_url: str = "http://localhost:8081/health"
+    coder_url: str = "http://localhost:8082/v1/chat/completions"
+    coder_health_url: str = "http://localhost:8082/health"
 
-    # Model selection (which GGUF to load on each GPU)
+    # Model selection
     reasoner_model_key: str = "gemma3"      # options: gemma3, dagger
     coder_model_key: str = "codegeex4"      # options: codegeex4, gemma2
 
@@ -105,40 +103,43 @@ class Settings(BaseSettings):
     image_gen_prefix: str = "professional corporate photography"
     image_prompt_suffix: str = "cinematic lighting, 8k, bokeh, sharp focus"
     image_gen_timeout: int = 60
-    image_gen_semaphore: int = 2           # concurrent image generations
+    image_gen_semaphore: int = 2
 
     # Reflection / critic loop
     reflection_enabled: bool = False
     reflection_max_iterations: int = 1
 
-    # Visual co‑pilot temperature
+    # Visual co-pilot temperature
     visual_copilot_temp: float = 0.6
     visual_copilot_top_p: float = 0.9
 
-    # CORS (comma‑separated)
+    # CORS (comma-separated)
     cors_origins: str = ""
 
     # API authentication (optional)
     api_key: Optional[str] = None
 
-    # Docker / hardware
+    # Native process management
+    llama_server_bin: str = "/home/rashid/llama.cpp/build/bin/llama-server"
     models_host_path: str = os.environ.get("MIA_MODELS_PATH", "/models")
-    docker_network: str = "mia_net"
-    container_prefix: str = "mia"          # containers: mia_reasoner, mia_coder
-    container_startup_timeout: int = 120   # seconds to wait for health
-    container_health_interval: float = 1.0
+    process_startup_timeout: int = 120   # seconds to wait for health after spawn
+    idle_timeout: int = 300              # seconds of inactivity before VRAM flush
+
+    # Unified single-model mode: one llama-server spanning both GPUs on port 8081.
+    # Both reasoner and coder phases hit the same endpoint.
+    unified_single_model: bool = True
+
+    # PPTX output directory
+    pptx_output_dir: Path = Path("./presentations")
 
     # Image job TTL (seconds)
     image_job_ttl: int = 3600
 
-    # Keys to search for slides list (top‑level, then depth‑1)
+    # Keys to search for slides list (top-level, then depth-1)
     slides_list_keys: List[str] = ["slides", "content", "sections", "outline"]
 
-    # Skip these keys when searching depth‑1
+    # Skip these keys when searching depth-1
     skip_keys_depth1: List[str] = ["_meta", "_visual_hints", "presenton"]
-
-    # Whether to stop containers on shutdown (default False – keep them hot)
-    stop_containers_on_shutdown: bool = False
 
     class Config:
         env_file = ".env"
@@ -377,6 +378,7 @@ class ErrorCode(str, Enum):
     UNSUPPORTED_FORMAT       = "UNSUPPORTED_FORMAT"
     INTERNAL_ERROR           = "INTERNAL_ERROR"
     UNAUTHORIZED             = "UNAUTHORIZED"
+    NOT_FOUND                = "NOT_FOUND"
 
 
 def error_response(
@@ -415,7 +417,6 @@ def _http_exc_to_response(exc: HTTPException, request_id: str) -> JSONResponse:
 def robust_json_loads(text: str) -> Dict[str, Any]:
     """Extract JSON from model output, handling markdown fences and trailing text."""
     text = text.strip()
-    # Remove markdown code fences
     text = re.sub(r"```(?:json)?\s*\n?", "", text).strip()
 
     decoder = json.JSONDecoder()
@@ -437,7 +438,7 @@ def robust_json_loads(text: str) -> Dict[str, Any]:
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # Strategy 3: brace‑counting fallback (string‑blind but catches malformed cases)
+    # Strategy 3: brace-counting fallback
     if start != -1:
         brace_count = 0
         for i, ch in enumerate(text[start:], start=start):
@@ -491,7 +492,7 @@ def _is_transient(exc: Exception) -> bool:
 
 
 def parse_enum_ci(enum_cls: type, value: str, default: Any, log_warning: bool = True) -> Any:
-    """Case‑insensitive enum lookup with logged fallback."""
+    """Case-insensitive enum lookup with logged fallback."""
     try:
         return enum_cls(value.lower())
     except ValueError:
@@ -640,116 +641,218 @@ class LLMClient:
 
 
 # ---------------------------------------------------------------------------
-# Standing‑Hot Docker Manager
-class UnifiedModelSwitcher:
-    def __init__(self):
-        self.client = docker.from_env()
-        self._lock = asyncio.Lock()   # async lock for startup
-        self._containers = {
-            "reasoner": f"{settings.container_prefix}_reasoner",
-            "coder": f"{settings.container_prefix}_coder",
+# Native Model Manager
+class NativeModelManager:
+    """Manages two llama-server host processes: reasoner (GPU 0 / port 8081)
+    and coder (GPU 1 / port 8082).  An idle watchdog terminates either process
+    after settings.idle_timeout seconds of inactivity to flush VRAM; the next
+    request triggers an on-demand restart.
+    """
+
+    _ROLE_CONFIG: Dict[str, Dict[str, Any]] = {
+        "reasoner": {"port": 8081, "gpu_idx": 0, "health_url": "http://localhost:8081/health"},
+        "coder":    {"port": 8082, "gpu_idx": 1, "health_url": "http://localhost:8082/health"},
+    }
+
+    def __init__(self) -> None:
+        self._procs: Dict[str, Optional[asyncio.subprocess.Process]] = {
+            "reasoner": None, "coder": None,
         }
-        self._model_commands = {
-            "gemma3": [
-                "-m", "/models/reasoner/gemma3.gguf",
-                "-c", "8192", "-fa", "on", "-ngl", "99", "--mmap"
-            ],
-            "dagger": [
-                "-m", "/models/reasoner/dagger.gguf",
-                "-c", "8192", "-fa", "on", "-ngl", "99", "--mmap"
-            ],
-            "codegeex4": [
-                "-m", "/models/coder/codegeex4.gguf",
-                "-c", "16384", "-fa", "on", "-ngl", "99", "--mmap"
-            ],
-            "gemma2": [
-                "-m", "/models/coder/verifier.gguf",
-                "-c", "8192", "-fa", "on", "-ngl", "99", "--mmap"
-            ]
+        self._locks: Dict[str, asyncio.Lock] = {
+            "reasoner": asyncio.Lock(), "coder": asyncio.Lock(),
         }
-        self._current_models = {"reasoner": None, "coder": None}
-        _base_logger.info("🚀 Standing‑Hot ModelSwitcher initialised (Docker).")
+        self._last_activity: Dict[str, float] = {
+            "reasoner": time.time(), "coder": time.time(),
+        }
+        self._watchdog_task: Optional[asyncio.Task] = None
 
-    async def ensure_model_ready(self, role: str, model_key: str, health_url: str, port: int) -> bool:
-        """
-        Idempotently ensures the container for the given role is running with the requested model.
-        Returns True if the container is healthy and ready.
-        """
-        async with self._lock:
-            if model_key not in self._model_commands:
-                _base_logger.error(f"❌ Unknown model key '{model_key}' for role {role}")
-                return False
+    # ------------------------------------------------------------------
+    # Public interface
 
-            container_name = self._containers[role]
-            gpu_idx = 0 if role == "reasoner" else 1
-            render_node = 128 + gpu_idx   # typical ROCm render node mapping; can be overridden
+    async def start_all(self) -> bool:
+        if settings.unified_single_model:
+            _base_logger.info(
+                "Native model manager: unified mode — single llama-server on port 8081 "
+                "spanning both GPUs (HIP_VISIBLE_DEVICES=0,1)."
+            )
+            ok = await self._start_role("reasoner")
+            if ok:
+                _base_logger.info("Unified model process is healthy.")
+            else:
+                _base_logger.warning("Unified model process failed to become healthy.")
+            self._watchdog_task = asyncio.create_task(self._watchdog())
+            return ok
+        else:
+            _base_logger.info("Native model manager: spawning both llama-server processes...")
+            reasoner_ok = await self._start_role("reasoner")
+            coder_ok = await self._start_role("coder")
+            if reasoner_ok and coder_ok:
+                _base_logger.info("Both model processes are healthy.")
+            else:
+                _base_logger.warning("One or both model processes failed to become healthy.")
+            self._watchdog_task = asyncio.create_task(self._watchdog())
+            return reasoner_ok and coder_ok
 
-            # Fast path: container already running with correct model and healthy
+    async def ensure_role_ready(self, role: str) -> bool:
+        """Touch activity timer; restart the process if it has exited or is unresponsive.
+        In unified mode, both roles share the single 'reasoner' process."""
+        # In unified mode everything routes through "reasoner"
+        effective_role = "reasoner" if settings.unified_single_model else role
+        self._last_activity[effective_role] = time.time()
+        config = self._ROLE_CONFIG[effective_role]
+        proc = self._procs.get(effective_role)
+
+        if proc is not None and proc.returncode is None:
+            if await self._wait_for_health(config["health_url"], timeout=5):
+                return True
+
+        _base_logger.warning("%s is unresponsive or exited — restarting on demand", effective_role)
+        return await self._start_role(effective_role)
+
+    def process_status(self) -> Dict[str, str]:
+        if settings.unified_single_model:
+            proc = self._procs.get("reasoner")
+            status = (
+                "idle (terminated)" if proc is None
+                else "running" if proc.returncode is None
+                else f"exited({proc.returncode})"
+            )
+            return {"unified (GPU 0+1 / port 8081)": status}
+        result = {}
+        for role, proc in self._procs.items():
+            result[role] = (
+                "idle (terminated)" if proc is None
+                else "running" if proc.returncode is None
+                else f"exited({proc.returncode})"
+            )
+        return result
+
+    async def shutdown(self) -> None:
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
             try:
-                container = await asyncio.to_thread(self.client.containers.get, container_name)
-                if container.status == "running" and self._current_models.get(role) == model_key:
-                    # Verify it's actually responsive
-                    if await self._wait_for_health(health_url, timeout=5):
-                        return True
-            except docker.errors.NotFound:
+                await self._watchdog_task
+            except asyncio.CancelledError:
                 pass
+        for role in ("reasoner", "coder"):
+            await self._terminate_role(role)
+        _base_logger.info("All llama-server processes terminated.")
 
-            _base_logger.info(f"🔄 Starting container {container_name} with model {model_key} on GPU {gpu_idx}...")
+    # ------------------------------------------------------------------
+    # Internal helpers
 
-            # Stop and remove any existing container with the same name
+    def _build_cmd(self, role: str) -> List[str]:
+        config = self._ROLE_CONFIG[role]
+        model_key = (
+            settings.reasoner_model_key if role == "reasoner" else settings.coder_model_key
+        )
+        base = settings.models_host_path
+        model_map: Dict[str, Tuple[str, str]] = {
+            "gemma3":    (f"{base}/reasoner/gemma3.gguf",  "8192"),
+            "dagger":    (f"{base}/reasoner/dagger.gguf",  "8192"),
+            "codegeex4": (f"{base}/coder/codegeex4.gguf",  "16384"),
+            "gemma2":    (f"{base}/coder/verifier.gguf",   "8192"),
+        }
+        model_path, ctx_size = model_map.get(model_key, (f"{base}/{model_key}.gguf", "8192"))
+        return [
+            settings.llama_server_bin,
+            "--host", "127.0.0.1",
+            "--port", str(config["port"]),
+            "-m", model_path,
+            "-c", ctx_size,
+            "-fa", "on",
+            "-ngl", "99",
+            "--mmap",
+        ]
+
+    def _env_for_role(self, role: str) -> Dict[str, str]:
+        if settings.unified_single_model:
+            visible = "0,1"   # span both GPUs for the single unified process
+        else:
+            gpu_idx = self._ROLE_CONFIG[role]["gpu_idx"]
+            visible = str(gpu_idx)
+        return {
+            **os.environ,
+            "HIP_VISIBLE_DEVICES":      visible,
+            "ROCR_VISIBLE_DEVICES":     visible,
+            "HSA_OVERRIDE_GFX_VERSION": "12.0.0",
+            "HSA_ENABLE_SDMA":          "0",
+            "ROCM_OVERCOMMIT":          "1",
+        }
+
+    async def _start_role(self, role: str) -> bool:
+        config = self._ROLE_CONFIG[role]
+        port = config["port"]
+        gpus = "0,1" if settings.unified_single_model else str(config["gpu_idx"])
+
+        async with self._locks[role]:
+            await self._terminate_role(role)
+
+            env = self._env_for_role(role)
+            cmd = self._build_cmd(role)
+            _base_logger.info("Spawning %s (GPU %s / port %d): %s", role, gpus, port, " ".join(cmd))
+
             try:
-                old = await asyncio.to_thread(self.client.containers.get, container_name)
-                if old.status == "running":
-                    await asyncio.to_thread(old.stop, timeout=10)
-                await asyncio.to_thread(old.remove)
-            except docker.errors.NotFound:
-                pass
-
-            # Prepare environment with GPU isolation
-            environment = {
-                "HSA_OVERRIDE_GFX_VERSION": "12.0.0",
-                "HSA_ENABLE_SDMA": "0",
-                "ROCM_OVERCOMMIT": "1",
-                "LLAMA_ARG_MMAP": "1",
-                "ROCR_VISIBLE_DEVICES": str(gpu_idx),          # isolate to specific GPU
-                "HIP_VISIBLE_DEVICES": str(gpu_idx),
-            }
-
-            # Run the container
-            try:
-                await asyncio.to_thread(
-                    self.client.containers.run,
-                    image=f"{settings.container_prefix}-{container_name}",
-                    name=container_name,
-                    command=self._model_commands[model_key],
-                    entrypoint="/llama.cpp/build/bin/llama-server",
-                    detach=True,
-                    network=settings.docker_network,
-                    ports={f"{port}/tcp": port},
-                    volumes={settings.models_host_path: {"bind": "/models", "mode": "ro"}},
-                    devices=[
-                        "/dev/kfd:/dev/kfd",
-                        f"/dev/dri/renderD{render_node}:/dev/dri/renderD{render_node}"
-                    ],
-                    environment=environment,
-                    ipc_mode="host",
-                    cap_add=["SYS_RESOURCE"],
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-            except Exception as e:
-                _base_logger.error(f"❌ Failed to start container {container_name}: {e}")
+                self._procs[role] = proc
+                self._last_activity[role] = time.time()
+            except Exception as exc:
+                _base_logger.error("Failed to spawn %s: %s", role, exc)
                 return False
 
-            # Wait for health endpoint to become responsive
-            if not await self._wait_for_health(health_url, timeout=settings.container_startup_timeout):
-                _base_logger.error(f"❌ Container {container_name} did not become healthy within timeout")
-                return False
+        if not await self._wait_for_health(config["health_url"], timeout=settings.process_startup_timeout):
+            _base_logger.error(
+                "%s did not become healthy within %ds", role, settings.process_startup_timeout
+            )
+            return False
 
-            self._current_models[role] = model_key
-            _base_logger.info(f"✅ Container {container_name} is ready with model {model_key}")
-            return True
+        _base_logger.info("%s ready on port %d (GPU %s)", role, port, gpus)
+        return True
+
+    async def _terminate_role(self, role: str) -> None:
+        proc = self._procs.get(role)
+        if proc is None or proc.returncode is not None:
+            self._procs[role] = None
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+        except ProcessLookupError:
+            pass
+        self._procs[role] = None
+        _base_logger.info("Terminated %s process", role)
+
+    async def _watchdog(self) -> None:
+        """Every 30s: terminate any role idle longer than settings.idle_timeout.
+        In unified mode only the single 'reasoner' process is watched."""
+        roles_to_watch = ("reasoner",) if settings.unified_single_model else ("reasoner", "coder")
+        while True:
+            await asyncio.sleep(30)
+            now = time.time()
+            for role in roles_to_watch:
+                idle = now - self._last_activity[role]
+                if idle > settings.idle_timeout:
+                    proc = self._procs.get(role)
+                    if proc is not None and proc.returncode is None:
+                        _base_logger.info(
+                            "Watchdog: %s idle %.0fs > %ds — terminating to flush VRAM",
+                            role, idle, settings.idle_timeout,
+                        )
+                        async with self._locks[role]:
+                            await self._terminate_role(role)
 
     async def _wait_for_health(self, health_url: str, timeout: int) -> bool:
-        """Poll health_url until it returns 200 or timeout seconds elapse."""
         start = time.time()
         async with httpx.AsyncClient(timeout=2) as client:
             while time.time() - start < timeout:
@@ -759,32 +862,11 @@ class UnifiedModelSwitcher:
                         return True
                 except Exception:
                     pass
-                await asyncio.sleep(settings.container_health_interval)
+                await asyncio.sleep(1.0)
         return False
 
-    async def initialize_symmetrical_grid(self) -> bool:
-        """Start both reasoner and coder containers with configured models."""
-        _base_logger.info("⚡ Standing‑Hot Cluster Setup: starting both containers...")
-        reasoner_ok = await self.ensure_model_ready(
-            role="reasoner",
-            model_key=settings.reasoner_model_key,
-            health_url=settings.reasoner_health_url,
-            port=8081
-        )
-        coder_ok = await self.ensure_model_ready(
-            role="coder",
-            model_key=settings.coder_model_key,
-            health_url=settings.coder_health_url,
-            port=8082
-        )
-        if reasoner_ok and coder_ok:
-            _base_logger.info("✅ Standing‑Hot grid fully operational.")
-        else:
-            _base_logger.warning("⚠️ Standing‑Hot grid degraded – one or both containers failed to start.")
-        return reasoner_ok and coder_ok
 
-
-UNIFIED_MODEL_SWITCHER = UnifiedModelSwitcher()
+NATIVE_MODEL_MANAGER = NativeModelManager()
 
 # Persistent circuit breakers — shared across all requests so state is retained.
 _REASONER_CIRCUIT = CircuitBreaker(failure_threshold=5, reset_timeout=30.0)
@@ -800,7 +882,7 @@ _cleanup_task: Optional[asyncio.Task] = None
 async def _cleanup_old_image_jobs() -> None:
     """Periodically remove jobs older than settings.image_job_ttl."""
     while True:
-        await asyncio.sleep(300)  # every 5 minutes
+        await asyncio.sleep(300)
         now = time.time()
         to_delete = [
             rid for rid, job in _image_jobs.items()
@@ -808,15 +890,12 @@ async def _cleanup_old_image_jobs() -> None:
         ]
         for rid in to_delete:
             _image_jobs.pop(rid, None)
-            if rid in _background_tasks:
-                # task already finished or will be cleaned elsewhere
-                pass
         if to_delete:
             _base_logger.info("Cleaned up %d stale image jobs", len(to_delete))
 
 
 # ---------------------------------------------------------------------------
-# Visual Co‑Pilot (batched LLM call for image prompts)
+# Visual Co-Pilot (batched LLM call for image prompts)
 async def enhance_image_prompts(
     slides_data: List[Dict[str, Any]],
     persona: Dict[str, Any],
@@ -864,7 +943,6 @@ async def enhance_image_prompts(
         raw = re.sub(r"```(?:json)?\s*\n?", "", raw).strip()
         parsed = json_loads(raw)
 
-        # Unwrap common wrapper keys
         if isinstance(parsed, dict):
             for key in ("slides", "data", "prompts", "items"):
                 if key in parsed and isinstance(parsed[key], list):
@@ -1039,13 +1117,43 @@ async def _reflection_loop(
 
 
 # ---------------------------------------------------------------------------
+# PPTX compiler
+def compile_pptx(presentation_json: dict, output_path: Path) -> None:
+    """Compile the pipeline's JSON output into a .pptx file at output_path."""
+    prs = pptx.Presentation()
+
+    for slide_data in presentation_json.get("slides", []):
+        title_text = slide_data.get("title", "No Title")
+        content_items = slide_data.get("content", [])
+
+        slide_layout = prs.slide_layouts[1]  # Title and Content
+        slide = prs.slides.add_slide(slide_layout)
+        slide.shapes.title.text = title_text
+
+        text_frame = slide.placeholders[1].text_frame
+        text_frame.text = ""
+
+        for i, item in enumerate(content_items):
+            p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
+            p.text = str(item)
+            p.font.size = Pt(20)
+            p.font.color.rgb = RGBColor(0, 0, 0)
+
+    prs.save(str(output_path))
+    _base_logger.info("PPTX saved: %s", output_path)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 class Orchestrator:
     def __init__(self, request_id: str, log: RequestLoggerAdapter) -> None:
         self.request_id = request_id
         self.log = log
         self.reasoner_client = LLMClient(settings.reasoner_url, circuit=_REASONER_CIRCUIT)
-        self.coder_client = LLMClient(settings.coder_url, circuit=_CODER_CIRCUIT)
+        # In unified mode both phases share the same endpoint and circuit breaker
+        coder_url = settings.reasoner_url if settings.unified_single_model else settings.coder_url
+        coder_circuit = _REASONER_CIRCUIT if settings.unified_single_model else _CODER_CIRCUIT
+        self.coder_client = LLMClient(coder_url, circuit=coder_circuit)
 
     async def run_full(
         self,
@@ -1055,12 +1163,14 @@ class Orchestrator:
         narrative: NarrativeStructure,
         pipeline_mode: PipelineMode,
     ) -> Dict[str, Any]:
-        """Full pipeline: Supervisor (reasoner) -> Worker (coder)."""
+        """Full pipeline: Supervisor (reasoner / GPU 0) -> Worker (coder / GPU 1)."""
         schema, schema_str = self._extract_schema(chat_req.response_format)
         persona = PERSONA_PROFILES.get(persona_key, PERSONA_PROFILES["balanced"])
 
-        # Phase 1: Reasoner (GPU 0) – produce outline
-        self.log.info("⚡ Standing‑Hot: routing Phase 1 to reasoner (GPU 0 / port 8081)")
+        # Phase 1: Reasoner — ensure process is alive before calling
+        self.log.info("Phase 1: routing to reasoner (GPU 0 / port 8081)")
+        if not await NATIVE_MODEL_MANAGER.ensure_role_ready("reasoner"):
+            raise_api_error(ErrorCode.SUPERVISOR_FAILED, "Reasoner process could not start.", 502)
         outline, arc = await self._run_supervisor(chat_req, params, persona, narrative, schema_str)
 
         if pipeline_mode == PipelineMode.OUTLINE_ONLY:
@@ -1071,15 +1181,17 @@ class Orchestrator:
                 "presenton": {"outline": outline, "presentation_arc": arc},
             }
 
-        # Phase 2: Coder (GPU 1) – expand outline to full presentation
-        self.log.info("⚡ Standing‑Hot: routing Phase 2 to coder (GPU 1 / port 8082)")
+        # Phase 2: Coder — ensure process is alive before calling
+        self.log.info("Phase 2: routing to coder (GPU 1 / port 8082)")
+        if not await NATIVE_MODEL_MANAGER.ensure_role_ready("coder"):
+            raise_api_error(ErrorCode.WORKER_FAILED, "Coder process could not start.", 502)
         final_json, worker_data = await self._run_worker(outline, arc, schema_str, persona, params)
         result = await self._finalise(final_json, worker_data, schema, schema_str, persona, persona_key, narrative, params)
         await self.close()
         return result
 
     async def run_expand(self, expand_req: ExpandRequest, params: Dict[str, float]) -> Dict[str, Any]:
-        """Expand a user‑supplied outline directly using the coder (GPU 1)."""
+        """Expand a user-supplied outline directly using the coder (GPU 1)."""
         persona_key = expand_req.persona.lower()
         persona = PERSONA_PROFILES.get(persona_key, PERSONA_PROFILES["balanced"])
         schema = expand_req.response_format.get("json_schema", {}).get("schema", {})
@@ -1090,9 +1202,11 @@ class Orchestrator:
             NarrativeStructure.PROBLEM_SOLUTION,
             log_warning=True,
         )
-        arc = {"note": "User‑supplied outline."}
+        arc = {"note": "User-supplied outline."}
 
-        self.log.info("⚡ Standing‑Hot: direct expansion using coder (GPU 1)")
+        self.log.info("Direct expansion: routing to coder (GPU 1 / port 8082)")
+        if not await NATIVE_MODEL_MANAGER.ensure_role_ready("coder"):
+            raise_api_error(ErrorCode.WORKER_FAILED, "Coder process could not start.", 502)
         final_json, worker_data = await self._run_worker(expand_req.outline, arc, schema_str, persona, params)
         result = await self._finalise(final_json, worker_data, schema, schema_str, persona, persona_key, narrative, params)
         await self.close()
@@ -1171,7 +1285,10 @@ class Orchestrator:
                 "presentation_arc": parsed.get("presentation_arc", ""),
                 "emotional_curve": parsed.get("emotional_curve", ""),
             }
-            self.log.info("Supervisor: %d slides, arc='%s' (%.2fs)", len(outline), arc.get("presentation_arc", "")[:60], time.perf_counter() - t0)
+            self.log.info(
+                "Supervisor: %d slides, arc='%s' (%.2fs)",
+                len(outline), arc.get("presentation_arc", "")[:60], time.perf_counter() - t0,
+            )
             return outline, arc
         except RetryError:
             raise_api_error(ErrorCode.SUPERVISOR_FAILED, "Supervisor unavailable after retries.", 502)
@@ -1204,7 +1321,7 @@ class Orchestrator:
             f"## Structure Arc Parameters\n{json_dumps(arc)}\n\n"
             f"## Layout Key Library\n{layout_registry}\n\n"
             "## Tasks\n"
-            "1. Expand each outline node into engaging, on‑persona prose.\n"
+            "1. Expand each outline node into engaging, on-persona prose.\n"
             "2. Preserve schema structure exactly.\n"
             "3. For each slide, populate `_visual_hints` as:\n"
             '   {"icon": "...", "layout": {"type": "...", "image_weight": ..., "text_weight": ...}, '
@@ -1219,7 +1336,11 @@ class Orchestrator:
             worker_data = await self.coder_client.generate(
                 [
                     {"role": "system", "content": worker_sys},
-                    {"role": "user", "content": f"Outline:\n{json_dumps(outline)}\n\nTarget Schema:\n{schema_str}\n\nProduce the final presentation JSON."},
+                    {"role": "user", "content": (
+                        f"Outline:\n{json_dumps(outline)}\n\n"
+                        f"Target Schema:\n{schema_str}\n\n"
+                        "Produce the final presentation JSON."
+                    )},
                 ],
                 temperature=params["temp"],
                 top_p=params["top_p"],
@@ -1262,7 +1383,7 @@ class Orchestrator:
                 self.log.error("Schema validation error: %s", exc)
                 raise_api_error(ErrorCode.SCHEMA_VALIDATION_FAILED, str(exc), 422)
 
-        # Find slides list (robust depth‑1 search)
+        # Find slides list (robust depth-1 search)
         slides_list = self._find_slides_list(final_json)
 
         enhanced_prompts: Dict[str, Dict] = {}
@@ -1277,39 +1398,38 @@ class Orchestrator:
                     hints["style_tags"] = ep.get("style_tags", [])
                 slide["image_url"] = settings.image_placeholder_url
 
-            # Fire‑and‑forget background image generation
             task = asyncio.create_task(
                 _generate_images_background(self.request_id, slides_list, enhanced_prompts, self.log)
             )
             _background_tasks[self.request_id] = task
 
+        # Compile PPTX in a thread so blocking file I/O doesn't stall the event loop
+        settings.pptx_output_dir.mkdir(parents=True, exist_ok=True)
+        pptx_path = settings.pptx_output_dir / f"presentation_{self.request_id}.pptx"
+        await asyncio.to_thread(compile_pptx, final_json, pptx_path)
+
         # Metadata
         final_json["_meta"] = {
-            "pipeline_version": "5.2.0 (Standing‑Hot)",
+            "pipeline_version": "6.0.0 (Native Sequential)",
             "supervisor_model": f"Reasoner ({settings.reasoner_model_key}) on GPU 0",
             "worker_model": f"Coder ({settings.coder_model_key}) on GPU 1",
             "persona": persona_key,
             "narrative_structure": narrative.value,
             "timestamp": time.time(),
             "request_id": self.request_id,
+            "download_url": f"/v1/presenton/download/{self.request_id}",
         }
-
-        # Compile .pptx in a thread so blocking file I/O doesn't stall the event loop
-        pptx_filename = f"presentation_{self.request_id}.pptx"
-        await asyncio.to_thread(compile_pptx, final_json, pptx_filename)
 
         worker_data["choices"][0]["message"]["content"] = json_dumps(final_json)
         return worker_data
 
     def _find_slides_list(self, data: Dict[str, Any]) -> List[Dict]:
-        """Search for slides list top‑level, then one level deeper, skipping metadata keys."""
-        # Top‑level search
+        """Search for slides list top-level, then one level deeper, skipping metadata keys."""
         for key in settings.slides_list_keys:
             val = data.get(key)
             if isinstance(val, list):
                 return val
 
-        # Depth‑1 search, skipping unwanted keys
         for k, v in data.items():
             if k.startswith("_") or k in settings.skip_keys_depth1:
                 continue
@@ -1330,27 +1450,23 @@ class Orchestrator:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _cleanup_task
-    _base_logger.info("⚡ Presenton Standing‑Hot Boot Sequence...")
+    _base_logger.info("Presenton proxy starting up (Native Sequential mode)...")
 
-    # Start the standing‑hot containers (only once)
-    ready = await UNIFIED_MODEL_SWITCHER.initialize_symmetrical_grid()
+    ready = await NATIVE_MODEL_MANAGER.start_all()
     if not ready:
-        _base_logger.warning("⚠️ One or both model containers failed to become ready – check logs.")
+        _base_logger.warning("One or both model processes failed to become ready – check logs.")
     else:
-        _base_logger.info("✅ Both model containers are ready and healthy.")
+        _base_logger.info("Both model processes are ready and healthy.")
 
-    # Start background image job cleanup
     _cleanup_task = asyncio.create_task(_cleanup_old_image_jobs())
 
-    # Mount static images folder if image generation is enabled
     if settings.image_gen_enabled:
         settings.image_output_dir.mkdir(parents=True, exist_ok=True)
         app.mount("/images", StaticFiles(directory=str(settings.image_output_dir)), name="images")
 
     yield
 
-    # Graceful shutdown
-    _base_logger.info("Shutting down Standing‑Hot proxy...")
+    _base_logger.info("Shutting down proxy...")
     if _cleanup_task:
         _cleanup_task.cancel()
         try:
@@ -1358,43 +1474,25 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # Wait for pending image generations (max 30s)
     if _background_tasks:
         _base_logger.info("Waiting for %d pending image generation tasks...", len(_background_tasks))
         _, pending = await asyncio.wait(_background_tasks.values(), timeout=30)
         if pending:
             _base_logger.warning("%d image generation tasks did not finish within 30s", len(pending))
 
-    # Optionally stop containers (default is to leave them hot)
-    if settings.stop_containers_on_shutdown:
-        _base_logger.info("Stopping standing‑hot containers...")
-        try:
-            reasoner = UNIFIED_MODEL_SWITCHER._containers["reasoner"]
-            coder = UNIFIED_MODEL_SWITCHER._containers["coder"]
-            for name in (reasoner, coder):
-                try:
-                    container = await asyncio.to_thread(
-                        UNIFIED_MODEL_SWITCHER.client.containers.get, name
-                    )
-                    if container.status == "running":
-                        await asyncio.to_thread(container.stop, timeout=10)
-                except docker.errors.NotFound:
-                    pass
-        except Exception as e:
-            _base_logger.warning("Error stopping containers: %s", e)
-
+    await NATIVE_MODEL_MANAGER.shutdown()
     _base_logger.info("Shutdown complete.")
 
 
 # ---------------------------------------------------------------------------
 # FastAPI application
 app = FastAPI(
-    title="Presenton Cluster Multi-Agent Proxy",
-    version="5.2.0",
+    title="Presenton Native Multi-Agent Proxy",
+    version="6.0.0",
     lifespan=lifespan,
 )
 
-# CORS middleware — localhost:3000 is always trusted; add more via CORS_ORIGINS env var
+# CORS middleware — localhost:3000 always trusted; add more via CORS_ORIGINS env var
 _cors_origins = list({
     "http://localhost:3000",
     *[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
@@ -1533,26 +1631,47 @@ async def expand_outline(
 async def image_status(
     request_id: str = Query(..., description="Request ID from original completion"),
 ) -> JSONResponse:
-    # Image generation is not wired up; always report complete so the UI stops polling.
+    job = _image_jobs.get(request_id)
+    if job is None:
+        # Image generation disabled or not yet started — report ready with zero images
+        return JSONResponse(content={
+            "ready": True,
+            "completed": 0,
+            "total": 0,
+            "slides": {},
+        })
     return JSONResponse(content={
-        "ready": True,
-        "completed": 5,
-        "total": 5,
-        "slides": [],
+        "ready": job["status"] == "done",
+        "completed": job["completed"],
+        "total": job["total"],
+        "slides": job["slides"],
     })
+
+
+@app.get("/v1/presenton/download/{request_id}")
+async def download_pptx(request_id: str) -> FileResponse:
+    pptx_path = settings.pptx_output_dir / f"presentation_{request_id}.pptx"
+    if not pptx_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": ErrorCode.NOT_FOUND.value, "message": f"No PPTX found for request_id '{request_id}'."},
+        )
+    return FileResponse(
+        path=str(pptx_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"presentation_{request_id}.pptx",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Health & observability
 @app.get("/health")
 async def health() -> Dict:
-    # Could also check model endpoints, but containers are already verified at startup.
-    return {"status": "ok", "version": "5.2.0", "engine_mode": "standing_hot_dual_gpu"}
+    return {"status": "ok", "version": "6.0.0", "engine_mode": "native_sequential_dual_gpu"}
 
 
 @app.get("/health/detailed")
 async def health_detailed() -> Dict:
-    """Check both model endpoints and Docker container status."""
     async def check_url(url: str) -> bool:
         try:
             async with httpx.AsyncClient(timeout=3) as c:
@@ -1563,25 +1682,18 @@ async def health_detailed() -> Dict:
 
     reasoner_ok = await check_url(settings.reasoner_health_url)
     coder_ok = await check_url(settings.coder_health_url)
-
-    # Also check container running status (optional)
-    container_status = {}
-    try:
-        for role, name in UNIFIED_MODEL_SWITCHER._containers.items():
-            try:
-                cont = await asyncio.to_thread(UNIFIED_MODEL_SWITCHER.client.containers.get, name)
-                container_status[role] = cont.status
-            except docker.errors.NotFound:
-                container_status[role] = "missing"
-    except Exception:
-        container_status["error"] = "cannot inspect docker"
+    proc_status = NATIVE_MODEL_MANAGER.process_status()
 
     return {
         "status": "ok" if (reasoner_ok and coder_ok) else "degraded",
         "proxy": "ok",
         "reasoner": "ok" if reasoner_ok else "unreachable",
         "coder": "ok" if coder_ok else "unreachable",
-        "containers": container_status,
+        "processes": proc_status,
+        "circuit_breakers": {
+            "reasoner": _REASONER_CIRCUIT.state,
+            "coder": _CODER_CIRCUIT.state,
+        },
     }
 
 
@@ -1610,34 +1722,6 @@ async def list_layouts() -> Dict:
 @app.get("/v1/presenton/narratives")
 async def list_narratives() -> Dict:
     return {ns.value: NARRATIVE_INSTRUCTIONS[ns] for ns in NarrativeStructure}
-
-
-# ---------------------------------------------------------------------------
-# PPTX compiler
-def compile_pptx(presentation_json: dict, output_filename: str = "output_presentation.pptx") -> None:
-    """Takes the pipeline's JSON output and compiles it into a downloadable .pptx file."""
-    prs = pptx.Presentation()
-
-    for slide_data in presentation_json.get("slides", []):
-        title_text = slide_data.get("title", "No Title")
-        content_items = slide_data.get("content", [])
-
-        slide_layout = prs.slide_layouts[1]  # Title and Content
-        slide = prs.slides.add_slide(slide_layout)
-
-        slide.shapes.title.text = title_text
-
-        text_frame = slide.placeholders[1].text_frame
-        text_frame.text = ""
-
-        for i, item in enumerate(content_items):
-            p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
-            p.text = str(item)
-            p.font.size = Pt(20)
-            p.font.color.rgb = RGBColor(0, 0, 0)
-
-    prs.save(output_filename)
-    _base_logger.info("PPTX compiled and saved: %s", output_filename)
 
 
 # ---------------------------------------------------------------------------
