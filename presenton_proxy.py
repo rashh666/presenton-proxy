@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     llama_server_bin: str = "/home/rashid/llama.cpp/build/bin/llama-server"
     models_host_path: str = os.environ.get("MIA_MODELS_PATH", "/models")
     reasoner_model_key: str = "gemma3"
-    process_startup_timeout: int = 120
+    process_startup_timeout: int = 300
     idle_timeout: int = 600
     llm_timeout: int = 600
     unified_single_model: bool = True
@@ -305,7 +305,6 @@ class NativeModelManager:
             "-c", ctx_size,
             "-fa", "on",
             "-ngl", "99",
-            "--mmap",
         ]
         if model_key == "qwen36_35b":
             cmd.extend([
