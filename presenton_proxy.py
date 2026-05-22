@@ -290,13 +290,14 @@ class NativeModelManager:
         model_key = settings.reasoner_model_key
         base = settings.models_host_path
         model_map: Dict[str, Tuple[str, str]] = {
-            "gemma3":    (f"{base}/reasoner/gemma3.gguf",  "8192"),
-            "dagger":    (f"{base}/reasoner/dagger.gguf",  "8192"),
-            "codegeex4": (f"{base}/coder/codegeex4.gguf",  "16384"),
-            "gemma2":    (f"{base}/coder/verifier.gguf",   "8192"),
+            "gemma3":     (f"{base}/reasoner/gemma3.gguf",  "8192"),
+            "dagger":     (f"{base}/reasoner/dagger.gguf",  "8192"),
+            "codegeex4":  (f"{base}/coder/codegeex4.gguf",  "16384"),
+            "gemma2":     (f"{base}/coder/verifier.gguf",   "8192"),
+            "qwen36_35b": (f"{base}/reasoner/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf", "8192"),
         }
         model_path, ctx_size = model_map.get(model_key, (f"{base}/{model_key}.gguf", "8192"))
-        return [
+        cmd = [
             settings.llama_server_bin,
             "--host", "127.0.0.1",
             "--port", str(config["port"]),
@@ -306,6 +307,13 @@ class NativeModelManager:
             "-ngl", "99",
             "--mmap",
         ]
+        if model_key == "qwen36_35b":
+            cmd.extend([
+                "-np", "1",       # single-slot mode — protects VRAM headroom
+                "--kv-unified",   # unified KV cache across both GPUs
+                "-sm", "row",     # row-split tensor parallelism across GPU 0 & 1
+            ])
+        return cmd
 
     def _env_for_role(self, role: str) -> Dict[str, str]:
         visible = "0,1" if settings.unified_single_model else str(self._ROLE_CONFIG[role]["gpu_idx"])
