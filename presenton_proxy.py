@@ -294,7 +294,7 @@ class NativeModelManager:
             "dagger":     (f"{base}/reasoner/dagger.gguf",  "8192"),
             "codegeex4":  (f"{base}/coder/codegeex4.gguf",  "16384"),
             "gemma2":     (f"{base}/coder/verifier.gguf",   "8192"),
-            "qwen36_35b": (f"{base}/reasoner/Qwen3.6-35B-A3B-UD-Q5_K_S.gguf", "8192"),
+            "qwen36_35b": (f"{base}/reasoner/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf", "8192"),
         }
         model_path, ctx_size = model_map.get(model_key, (f"{base}/{model_key}.gguf", "8192"))
         cmd = [
@@ -312,7 +312,8 @@ class NativeModelManager:
                 "-np", "1",       # single-slot mode — protects VRAM headroom
                 "--kv-unified",   # unified KV cache across both GPUs
                 "-sm", "row",     # row-split tensor parallelism across GPU 0 & 1
-                "--spec-draft-n-max", "2",  # activates internal MTP heads — no separate model-draft needed
+                "--model-draft", f"{base}/reasoner/mtp-Qwen_Qwen3.6-35B-A3B-Q4_0.gguf",  # 1.2 GB MTP heads
+                "--spec-draft-n-max", "2",  # draft 2 tokens ahead per cycle
             ])
         return cmd
 
