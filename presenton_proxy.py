@@ -312,8 +312,8 @@ class NativeModelManager:
                 "-np", "1",       # single-slot mode — protects VRAM headroom
                 "--kv-unified",   # unified KV cache across both GPUs
                 "-sm", "row",     # row-split tensor parallelism across GPU 0 & 1
-                "--model-draft", model_path,  # ad-hoc MTP: draft model points to itself
-                "--draft", "2",               # speculative drafting depth (2 tokens ahead)
+                "--model-draft", model_path,      # ad-hoc MTP: draft model points to itself
+                "--spec-draft-n-max", "2",        # speculative drafting depth (replaces legacy --draft)
             ])
         return cmd
 
